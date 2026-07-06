@@ -4525,14 +4525,14 @@ def resolve_image_provider(env: dict[str, str]) -> dict[str, str]:
     if preference in {"ark", "seedream", "doubao"}:
         if not has_ark:
             raise RuntimeError("已选择火山方舟出图，但 ARK_API_KEY 还没填写。")
-        return {"key": "ark", "label": "豆包 Seedream", "model": resolve_ark_image_model(env)}
+        return {"key": "ark", "label": "火山方舟 Seedream", "model": resolve_ark_image_model(env)}
 
     if prefer_apiyi:
         if not has_apiyi:
             raise RuntimeError("已开启 OpenAI 兼容出图，但 APIYI_API_KEY 或 APIYI_BASE_URL 还没填完整。")
         return {"key": "apiyi", "label": "OpenAI 兼容文生图", "model": resolve_apiyi_image_model(env)}
     if has_ark:
-        return {"key": "ark", "label": "豆包 Seedream", "model": resolve_ark_image_model(env)}
+        return {"key": "ark", "label": "火山方舟 Seedream", "model": resolve_ark_image_model(env)}
     if has_apiyi:
         return {"key": "apiyi", "label": "OpenAI 兼容文生图", "model": resolve_apiyi_image_model(env)}
     raise RuntimeError("未配置可用的文生图服务。请先配置方舟密钥，或填写 OpenAI 兼容文生图配置。")
@@ -4542,7 +4542,8 @@ def resolve_image_provider_queue(env: dict[str, str]) -> list[dict[str, str]]:
     """Return image providers in failover order.
 
     auto_no_apiyi intentionally skips APIYI so image generation never waits on
-    that account. Explicit IMAGE_PROVIDER=apiyi still uses APIYI only.
+    that account. Explicit IMAGE_PROVIDER values are strict and do not silently
+    fall back to another provider.
     """
     preference = clean_text(env.get("IMAGE_PROVIDER") or "auto").lower() or "auto"
     has_ark = bool((env.get("ARK_API_KEY", "") or "").strip())
@@ -4551,7 +4552,7 @@ def resolve_image_provider_queue(env: dict[str, str]) -> list[dict[str, str]]:
 
     def record(key: str) -> dict[str, str]:
         if key == "ark":
-            return {"key": "ark", "label": "豆包 Seedream", "model": resolve_ark_image_model(env)}
+            return {"key": "ark", "label": "火山方舟 Seedream", "model": resolve_ark_image_model(env)}
         if key == "apiyi":
             return {"key": "apiyi", "label": "OpenAI 兼容文生图", "model": resolve_apiyi_image_model(env)}
         if key == "chatgpt_web_auto":
@@ -4571,11 +4572,9 @@ def resolve_image_provider_queue(env: dict[str, str]) -> list[dict[str, str]]:
         raise RuntimeError("未配置可用的非 APIYI 图片生成渠道。")
 
     if preference in {"ark", "seedream", "doubao"}:
-        providers = [record("ark")] if has_ark else []
-        if allow_chatgpt_auto:
-            providers.append(record("chatgpt_web_auto"))
-        if providers:
-            return providers
+        if not has_ark:
+            raise RuntimeError("已选择火山方舟出图，但 ARK_API_KEY 还没填写。")
+        return [record("ark")]
 
     if preference in {"chatgpt_web_auto", "chatgpt-auto", "chatgpt_auto", "chatgpt_browser"}:
         return [record("chatgpt_web_auto")]
@@ -4587,6 +4586,18 @@ def resolve_image_provider_queue(env: dict[str, str]) -> list[dict[str, str]]:
         return [record("apiyi")]
 
     return [resolve_image_provider(env)]
+
+
+def describe_image_provider_queue(env: dict[str, str]) -> str:
+    providers = resolve_image_provider_queue(env)
+    preference = clean_text(env.get("IMAGE_PROVIDER") or "auto").lower() or "auto"
+    labels = " -> ".join(
+        f"{provider['label']}({provider.get('model') or 'default'})"
+        for provider in providers
+    )
+    if preference in {"auto", "auto_no_apiyi", "no_apiyi", "auto_without_apiyi", "skip_apiyi"}:
+        return f"自动选择队列：{labels}"
+    return f"已锁定图片入口：{labels}；失败将直接报错，不自动切换"
 
 
 def generate_openai_compatible_image(
@@ -4708,6 +4719,14 @@ def generate_configured_image(
                     attempt=attempt,
                     audit_reasons=audit_report.get("reasons", []) if audit_report else None,
                 )
+                display_name = output_path.name
+                if display_name.startswith(".") and ".gen-" in display_name:
+                    display_name = display_name[1:].split(".gen-", 1)[0] + output_path.suffix
+                if log:
+                    log(
+                        f"[images] 使用 {provider['label']} 生成 {display_name}"
+                        f"（model={provider.get('model') or 'default'}，attempt={attempt}/{IMAGE_PROMPT_REWRITE_ATTEMPTS}）"
+                    )
                 if provider["key"] == "chatgpt_web_auto":
                     last_path = generate_chatgpt_web_auto_image(prepared_prompt, output_path, size, purpose, env, log=log)
                 elif provider["key"] == "chatgpt_handoff":
@@ -4740,9 +4759,12 @@ def generate_configured_image(
             last_error = exc
             if output_path.name.startswith("."):
                 _cleanup_generated_tmp(output_path)
-            if provider_index < len(providers):
-                if log:
+            if log:
+                if provider_index < len(providers):
                     log(f"[images] {provider['label']} 失败：{exc}；切换到下一个图片入口")
+                else:
+                    log(f"[images] {provider['label']} 失败：{exc}")
+            if provider_index < len(providers):
                 continue
             raise
 
@@ -11189,6 +11211,7 @@ class JobRuntime:
         if step in {"images", "images_missing"}:
             env = runtime_env()
             provider = resolve_image_provider_queue(env)[0]
+            provider_desc = describe_image_provider_queue(env)
             if not scene_lines:
                 scene_lines = current_scene_prompts(project_id, content, mode, project["topic_name"])
             missing_only = step == "images_missing"
@@ -11217,6 +11240,7 @@ class JobRuntime:
                 add("[images] 缺失编号没有可用提示词，请先重建图片提示词或重新生成字幕时间轴。")
                 return True, scene_lines
             add(f"[images] 正在调用 {provider['label']} 生成 {len(scene_jobs)} 张场景图")
+            add(f"[images] {provider_desc}")
             if provider["key"] == "apiyi":
                 add("[images] OpenAI 兼容文生图单张通常需要几十秒；已切换为稳态串行生成，逐张完成后再进入下一张")
             if provider["key"] == "chatgpt_handoff":
@@ -11276,6 +11300,7 @@ class JobRuntime:
         if step in {"covers", "covers_missing"}:
             env = runtime_env()
             provider = resolve_image_provider_queue(env)[0]
+            provider_desc = describe_image_provider_queue(env)
             landscape_prompt = video_spec_cover_prompt(project_id, "landscape") or build_content_cover_prompt(project, template, content, "landscape")
             story_prompt = video_spec_cover_prompt(project_id, "story") or build_content_cover_prompt(project, template, content, "story")
             portrait_prompt = video_spec_cover_prompt(project_id, "portrait") or build_content_cover_prompt(project, template, content, "portrait")
@@ -11292,6 +11317,7 @@ class JobRuntime:
                     add("[covers] 没有缺失的封面图，跳过补图。")
                     return True, scene_lines
                 add("[covers] 续跑模式：只补缺失封面，保留已有封面")
+            add(f"[covers] {provider_desc}")
             if provider["key"] == "apiyi":
                 add("[covers] OpenAI 兼容文生图封面已切换为串行生成")
             if provider["key"] == "chatgpt_handoff":
