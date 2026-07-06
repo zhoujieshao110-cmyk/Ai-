@@ -1,0 +1,11 @@
+{
+  "name": "单人图文",
+  "brand_name": "单人图文",
+  "mode": "article",
+  "default_disclaimer": "",
+  "release_tags": "图文",
+  "cover_style": "forbes",
+  "cover_footnote_line_1": "",
+  "cover_footnote_line_2": "",
+  "builtin_locked": true
+}

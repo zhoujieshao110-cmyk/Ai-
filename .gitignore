@@ -1,0 +1,64 @@
+# Python / local runtime
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.venv/
+venv/
+
+# Local secrets and machine state
+.env
+.env.*
+!.env.example
+*.key
+*.pem
+cookies/
+
+# Short Video Studio private runtime data
+data/config/
+data/projects/
+data/template-products/
+data/_original_runtime/
+data/counters.json
+data/*.log
+data/*.pid
+data/*.tmp
+
+# Keep public channel templates as examples.
+!data/templates/
+!data/templates/**
+
+# Build / packaging outputs
+build/
+dist/
+*.zip
+*.7z
+*.exe
+*.msi
+
+# Local analysis, manual tests, screenshots and generated verification output
+_analysis/
+_manual_api_test/
+_manual_apiyi_official_test/
+tmp*
+verify-*
+*-verify.*
+volc_tts_doc*.html
+
+# Logs and process files
+*.log
+*.pid
+*.out
+*.err
+
+# Playwright / browser automation artifacts
+test-results/
+playwright-report/
+blob-report/
+
+# OS / editor noise
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/

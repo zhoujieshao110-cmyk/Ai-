@@ -1,0 +1,433 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>短片工坊 · Short Video Studio</title>
+    <link rel="stylesheet" href="./styles.css?v=20260701-optimization-plan-v1" />
+    <script defer src="./app.js?v=20260706-channel-project-filter-v1"></script>
+  </head>
+  <body>
+    <div id="app" class="studio-shell">
+      <aside class="sidebar">
+        <div class="brand">
+          <div class="brand__badge">SV</div>
+          <div>
+            <h1>短片工坊</h1>
+            <p>模板 -> 项目 -> brief -> content -> 生产</p>
+          </div>
+        </div>
+
+        <div class="sidebar__actions">
+          <button id="new-project-btn" class="btn btn--primary">新建主题</button>
+          <button id="new-template-btn" class="btn btn--ghost">新建频道</button>
+        </div>
+
+        <section class="sidebar__block sidebar__block--templates">
+          <div class="section-head section-head--sidebar">
+            <h2>频道模板</h2>
+            <div class="toolbar toolbar--sidebar">
+              <button id="new-template-inline-btn" class="link-btn">新建频道</button>
+              <button id="open-templates-btn" class="link-btn">打开模板目录</button>
+            </div>
+          </div>
+          <div id="template-list" class="stack stack--scroll"></div>
+        </section>
+
+        <section class="sidebar__block sidebar__block--fill sidebar__block--projects">
+          <div class="section-head section-head--sidebar">
+            <h2>主题项目</h2>
+            <button id="refresh-projects-btn" class="link-btn">刷新</button>
+          </div>
+          <div id="project-list-scope" class="muted"></div>
+          <div id="project-list" class="stack stack--scroll"></div>
+        </section>
+      </aside>
+
+      <main class="workspace">
+        <header class="topbar">
+          <nav class="top-tabs" aria-label="main tabs">
+            <button class="tab is-active" data-tab="content">脚本</button>
+            <button class="tab" data-tab="produce">生产</button>
+            <button class="tab" data-tab="files">成片</button>
+            <button class="tab" data-tab="releases">投放</button>
+            <button class="tab" data-tab="config">配置</button>
+          </nav>
+
+          <div class="top-actions">
+            <span id="backend-status" class="pill pill--warn">后端未连接</span>
+          </div>
+        </header>
+
+        <div id="backend-banner" class="banner banner--warn hidden">
+          <div>
+            <strong>后端还没有连上。</strong>
+            <span>请先运行 `run.bat` 或启动本地 uvicorn 服务，再刷新当前页面。</span>
+          </div>
+        </div>
+
+        <section class="project-hero">
+          <div>
+            <div class="eyebrow">当前项目</div>
+            <h2 id="workspace-title">请选择一个主题</h2>
+            <p id="workspace-subtitle">当前页面支持直接从 file:// 打开，后端默认连接到 127.0.0.1:8765</p>
+          </div>
+        </section>
+
+        <section class="workflow-card">
+          <button class="workflow-step tab is-active" data-tab="content"><span>1</span>脚本生成</button>
+          <button class="workflow-step tab" data-tab="produce"><span>2</span>生产成片</button>
+          <button class="workflow-step tab" data-tab="files"><span>3</span>成片检查</button>
+          <button class="workflow-step tab" data-tab="releases"><span>4</span>投放发布</button>
+          <button class="workflow-step tab" data-tab="config"><span>5</span>系统配置</button>
+        </section>
+        <section id="project-status-strip" class="project-status-strip"></section>
+
+        <section id="tab-content" class="tab-panel is-active">
+          <div class="panel-grid panel-grid--script">
+            <article class="card card--editor">
+              <div class="section-head">
+                <div class="title-with-chip">
+                  <h3>创作简报 · brief.md</h3>
+                  <span class="chip chip--accent">MARKDOWN</span>
+                </div>
+                <div class="toolbar">
+                  <button id="import-audio-btn" class="btn btn--ghost">导入音频转写</button>
+                  <button id="save-brief-btn" class="btn btn--dark">保存 brief</button>
+                </div>
+              </div>
+              <textarea id="brief-input" class="text-editor text-editor--short" placeholder="在这里整理主题、素材、想法，或者直接贴一份 brief。"></textarea>
+              <div class="toolbar toolbar--spaced">
+                <div class="toolbar">
+                  <button id="generate-content-btn" class="btn btn--primary btn--lg">生成 content.md</button>
+                  <button id="cancel-generate-btn" class="btn btn--danger btn--lg">停止生成</button>
+                </div>
+                <span id="content-generate-status" class="muted">状态：空闲</span>
+              </div>
+            </article>
+
+            <div class="right-stack">
+              <article class="card">
+                <div class="section-head">
+                  <h3>创作工具</h3>
+                  <div class="toolbar toolbar--tight">
+                    <button id="topic-score-btn" class="btn btn--ghost">选题评分</button>
+                    <button id="viral-doctor-btn" class="btn btn--ghost">脚本体检</button>
+                    <button id="viral-rewrite-btn" class="btn btn--ghost">一键总编优化</button>
+                    <button id="optimization-plan-btn" class="btn btn--primary">优化路线</button>
+                    <button id="channel-history-btn" class="btn btn--ghost">频道复盘</button>
+                    <button id="rhythm-check-btn" class="btn btn--ghost">节奏体检</button>
+                    <button id="rhythm-enhance-btn" class="btn btn--primary">节奏增强</button>
+                    <button id="video-spec-btn" class="btn btn--ghost">编导规格</button>
+                    <button id="image-layer-btn" class="btn btn--ghost">图片分层</button>
+                    <button id="title-ab-btn" class="btn btn--ghost">标题封面 A/B</button>
+                    <button id="quality-gate-btn" class="btn btn--primary">质量总检</button>
+                  </div>
+                </div>
+                <div id="summary-cards" class="summary-grid"></div>
+              </article>
+
+              <article class="card">
+                <div class="section-head">
+                  <h3>参考资料</h3>
+                </div>
+                <div id="reference-list" class="stack stack--sm muted">暂无参考资料</div>
+              </article>
+            </div>
+          </div>
+
+          <article class="card card--grow">
+            <div class="section-head">
+              <h3>脚本成稿 · content.md</h3>
+              <div class="toolbar">
+                <button id="next-to-produce-btn" class="btn btn--primary">下一步：去生产</button>
+                <button id="save-content-btn" class="btn btn--ghost">保存 content</button>
+                <button id="open-project-folder-btn" class="btn btn--ghost">打开项目目录</button>
+              </div>
+            </div>
+            <textarea id="content-input" class="text-editor text-editor--tall" placeholder="生成后的 content.md 会出现在这里。"></textarea>
+          </article>
+        </section>
+
+        <section id="tab-produce" class="tab-panel">
+          <div class="panel-grid panel-grid--narrow">
+            <article class="card">
+              <div class="section-head">
+                <h3>生产步骤</h3>
+                <div class="toolbar">
+                  <button id="run-job-btn" class="btn btn--primary">开始生产</button>
+                  <button id="resume-plan-btn" class="btn btn--ghost">续跑建议</button>
+                  <button id="next-to-files-btn" class="btn btn--ghost">下一步：看成片</button>
+                  <button id="chatgpt-relogin-btn" class="btn btn--ghost">重新登录 ChatGPT</button>
+                  <button id="chatgpt-logout-btn" class="btn btn--ghost">退出 ChatGPT</button>
+                  <button id="cancel-job-btn" class="btn btn--danger">紧急中止</button>
+                </div>
+              </div>
+              <div class="image-provider-bar">
+                <label>
+                  <span>图片入口</span>
+                  <select id="image-provider-select">
+                    <option value="auto_no_apiyi">自动选择（不使用 APIYI）</option>
+                    <option value="ark">火山方舟 Seedream</option>
+                    <option value="chatgpt_web_auto">ChatGPT 网页自动化</option>
+                    <option value="chatgpt_handoff">ChatGPT 网页/桌面接力</option>
+                    <option value="apiyi">OpenAI 兼容 / API易</option>
+                    <option value="auto">自动选择（原逻辑）</option>
+                  </select>
+                </label>
+                <button id="image-provider-save-btn" class="btn btn--ghost">切换入口</button>
+                <span id="image-provider-current" class="muted">等待配置加载</span>
+              </div>
+              <div class="image-provider-bar">
+                <label>
+                  <span>场景图张数</span>
+                  <select id="scene-count-mode">
+                    <option value="auto">自动估算</option>
+                    <option value="fixed">固定张数</option>
+                  </select>
+                </label>
+                <label>
+                  <span>固定数量</span>
+                  <input id="scene-count-fixed" type="number" min="1" max="24" step="1" value="6" />
+                </label>
+                <button id="scene-count-save-btn" class="btn btn--ghost">保存张数</button>
+                <span id="scene-count-current" class="muted">跟随脚本和音频自动估算</span>
+              </div>
+              <div class="image-review-bar">
+                <label class="image-review-toggle">
+                  <input id="image-review-required" type="checkbox" checked />
+                  <span>图片确认后才允许成片合成</span>
+                </label>
+                <button id="confirm-images-btn" class="btn btn--ghost">确认当前图片，允许成片</button>
+                <span id="image-review-pill" class="pill pill--warn">待确认</span>
+                <div id="image-review-helper" class="muted image-review-helper">先生成场景图和封面图，确认后再进入视频合成。</div>
+              </div>
+              <div id="step-list" class="step-list"></div>
+            </article>
+
+            <article class="card">
+              <div class="section-head">
+                <h3>任务状态</h3>
+                <span id="job-status-pill" class="pill">暂无任务</span>
+              </div>
+              <div id="job-progress" class="stack stack--sm"></div>
+            </article>
+          </div>
+
+          <div class="panel-grid">
+            <article class="card">
+              <div class="section-head">
+                <h3>运行日志</h3>
+                <button id="refresh-job-btn" class="btn btn--ghost">刷新状态</button>
+              </div>
+              <pre id="job-log" class="log-view">暂无日志</pre>
+            </article>
+
+            <article class="card">
+              <div class="section-head">
+                <h3>场景图状态</h3>
+                <span id="scene-status-pill" class="pill">未生成</span>
+              </div>
+              <div id="scene-grid" class="media-grid"></div>
+            </article>
+
+            <article class="card">
+              <div class="section-head">
+                <h3>封面预览</h3>
+                <span id="cover-status-pill" class="pill">未生成</span>
+              </div>
+              <div id="cover-grid" class="media-grid media-grid--covers"></div>
+            </article>
+          </div>
+        </section>
+
+        <section id="tab-files" class="tab-panel">
+          <article class="card">
+            <div class="section-head">
+              <h3>项目产物</h3>
+              <div class="toolbar">
+                <button id="next-to-releases-btn" class="btn btn--ghost">下一步：去投放</button>
+                <button id="video-self-check-btn" class="btn btn--primary">成片自检</button>
+                <button id="refresh-files-btn" class="btn btn--ghost">刷新文件</button>
+                <button id="open-data-folder-btn" class="btn btn--ghost">打开数据目录</button>
+              </div>
+            </div>
+            <div id="file-list" class="file-list muted">暂无文件</div>
+          </article>
+        </section>
+
+        <section id="tab-releases" class="tab-panel">
+          <div class="panel-grid panel-grid--narrow">
+            <article class="card">
+              <div class="section-head">
+                <h3>自动发布</h3>
+                <div class="toolbar">
+                  <button id="release-checklist-btn" class="btn btn--primary">发布前检查</button>
+                  <button id="prepare-release-automation-btn" class="btn btn--ghost">准备环境</button>
+                  <button id="refresh-release-automation-btn" class="btn btn--ghost">刷新状态</button>
+                </div>
+              </div>
+              <div id="release-automation-summary" class="stack stack--sm muted">等待载入自动发布状态</div>
+              <div class="form-grid">
+                <label>
+                  <span>平台</span>
+                  <select id="release-auto-platform">
+                    <option value="douyin">抖音</option>
+                    <option value="kuaishou">快手</option>
+                    <option value="xiaohongshu">小红书</option>
+                  </select>
+                </label>
+                <label>
+                  <span>账号别名</span>
+                  <input id="release-auto-account" type="text" list="release-auto-account-options" placeholder="default（用于本地 cookie 文件名）" />
+                  <datalist id="release-auto-account-options"></datalist>
+                </label>
+                <label>
+                  <span>浏览器模式</span>
+                  <select id="release-auto-browser-mode">
+                    <option value="headless">headless</option>
+                    <option value="headed">headed</option>
+                  </select>
+                </label>
+                <label>
+                  <span>预约时间</span>
+                  <input id="release-auto-schedule" type="datetime-local" />
+                </label>
+                <label class="form-grid__wide">
+                  <span>发布标题</span>
+                  <input id="release-auto-title" type="text" placeholder="自动带入推荐发布标题" />
+                </label>
+                <label class="form-grid__wide">
+                  <span>标签（逗号分隔）</span>
+                  <input id="release-auto-tags" type="text" placeholder="知识科普,冷知识,涨知识" />
+                </label>
+                <label class="form-grid__wide">
+                  <span>发布描述</span>
+                  <textarea id="release-auto-description" class="text-editor text-editor--medium" placeholder="自动带入摘要、核心观点和互动钩子"></textarea>
+                </label>
+              </div>
+              <div class="toolbar">
+                <button id="release-auto-login-btn" class="btn btn--ghost">登录账号</button>
+                <button id="release-auto-check-btn" class="btn btn--ghost">检测账号</button>
+                <button id="release-auto-publish-btn" class="btn btn--primary">发布视频</button>
+                <button id="release-auto-cancel-btn" class="btn btn--danger">取消任务</button>
+              </div>
+            </article>
+
+            <article class="card">
+              <div class="section-head">
+                <h3>发布任务</h3>
+                <span id="release-task-pill" class="pill">未启动</span>
+              </div>
+              <div id="release-task-meta" class="stack stack--sm muted">这里会显示仓库、账号、源文件和最近一次任务状态。</div>
+              <pre id="release-automation-log" class="log-view log-view--compact">暂无自动发布任务</pre>
+            </article>
+          </div>
+
+          <div class="panel-grid panel-grid--narrow">
+            <article class="card">
+              <div class="section-head">
+                <h3>投放链接</h3>
+                <button id="save-release-btn" class="btn btn--primary">添加链接</button>
+              </div>
+              <div class="form-grid">
+                <label>
+                  <span>平台</span>
+                  <input id="release-platform" type="text" placeholder="例如：抖音 / 视频号 / 小红书" />
+                </label>
+                <label>
+                  <span>链接</span>
+                  <input id="release-url" type="text" placeholder="https://..." />
+                </label>
+                <label class="form-grid__wide">
+                  <span>备注</span>
+                  <input id="release-note" type="text" placeholder="发布时间、投放策略、表现备注" />
+                </label>
+                <label>
+                  <span>播放</span>
+                  <input id="release-views" type="number" min="0" placeholder="0" />
+                </label>
+                <label>
+                  <span>点赞</span>
+                  <input id="release-likes" type="number" min="0" placeholder="0" />
+                </label>
+                <label>
+                  <span>评论</span>
+                  <input id="release-comments" type="number" min="0" placeholder="0" />
+                </label>
+                <label>
+                  <span>转发</span>
+                  <input id="release-shares" type="number" min="0" placeholder="0" />
+                </label>
+                <label>
+                  <span>收藏</span>
+                  <input id="release-favorites" type="number" min="0" placeholder="0" />
+                </label>
+                <label>
+                  <span>完播率 %</span>
+                  <input id="release-completion-rate" type="number" min="0" max="100" step="0.1" placeholder="0" />
+                </label>
+              </div>
+            </article>
+
+            <article class="card">
+              <div class="section-head">
+                <h3>当前投放</h3>
+                <button id="refresh-releases-btn" class="btn btn--ghost">刷新</button>
+              </div>
+              <div id="release-list" class="stack">暂无投放链接</div>
+            </article>
+          </div>
+        </section>
+
+        <section id="tab-config" class="tab-panel">
+          <article class="card">
+            <div class="section-head">
+              <h3>本地配置</h3>
+              <div class="toolbar">
+                <button id="save-config-btn" class="btn btn--primary">写入 .env</button>
+                <button id="validate-config-btn" class="btn btn--ghost">校验密钥</button>
+                <button id="refresh-config-btn" class="btn btn--ghost">刷新配置</button>
+              </div>
+            </div>
+            <div id="config-fields"></div>
+          </article>
+
+          <article class="card" style="margin-top:16px;">
+            <div class="section-head">
+              <div>
+                <h3>Windows 导出</h3>
+                <div class="muted">一键导出便携 EXE，按需再生成 ZIP 分发包。</div>
+              </div>
+              <div class="toolbar">
+                <button id="open-packaging-output-btn" class="btn btn--ghost">打开输出目录</button>
+                <button id="start-portable-build-btn" class="btn btn--primary">导出便携 EXE</button>
+                <button id="start-zip-build-btn" class="btn btn--ghost">生成 ZIP</button>
+                <button id="cancel-packaging-btn" class="btn btn--danger">取消导出</button>
+                <button id="refresh-packaging-btn" class="btn btn--ghost">刷新状态</button>
+              </div>
+            </div>
+            <div class="section-head" style="margin-top:12px;">
+              <div id="packaging-summary" class="stack stack--sm muted">等待载入导出状态</div>
+              <div id="packaging-status-pill" class="pill">未启动</div>
+            </div>
+            <pre id="packaging-log" class="log-view log-view--compact">暂无导出任务</pre>
+          </article>
+        </section>
+      </main>
+    </div>
+
+    <div id="modal" class="modal hidden">
+      <div class="modal__backdrop" data-close-modal="true"></div>
+      <div class="modal__panel">
+        <div class="section-head">
+          <h3 id="modal-title">详情</h3>
+          <button id="modal-close-btn" class="btn btn--ghost">关闭</button>
+        </div>
+        <div id="modal-body" class="modal__body"></div>
+      </div>
+    </div>
+
+    <input id="audio-file-input" type="file" accept=".mp3,.wav,.m4a,.ogg,.flac,.aac" hidden />
+  </body>
+</html>
