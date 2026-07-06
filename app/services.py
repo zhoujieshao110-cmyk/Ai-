@@ -1526,7 +1526,7 @@ def build_scene_plan(project: dict[str, Any], content: str, timeline: dict[str, 
                 "motion": scene_motion_for_type(visual_type, idx),
                 "transition": scene_transition_for_index(idx, total, visual_type),
                 "material_hint": scene_material_hint(visual_type),
-                "safe_text_policy": "场景图可保留 1-3 个清晰短标签；字幕、免责声明和长段正文由后期叠加层处理。",
+                "safe_text_policy": "场景图可保留 1-2 个清晰短标签或数据 callout；字幕、免责声明和长段正文由后期叠加层处理。",
             }
         )
 
@@ -1541,7 +1541,7 @@ def build_scene_plan(project: dict[str, Any], content: str, timeline: dict[str, 
         "workflow_notes": [
             "先由脚本和字幕对齐得到时间轴。",
             "每镜使用叙事状态约束画面，不让图片 prompt 承担文字说明。",
-            "画面中文字、标题和重点字幕留给后期成片层叠加。",
+            "画面允许少量短词/数据钩子，重点字幕和长说明仍交给后期成片层叠加。",
         ],
         "scenes": scenes,
     }
@@ -1657,7 +1657,7 @@ def build_video_spec(project_id: int, content: str | None = None) -> dict[str, A
                 "material_style": classify_material_style(f"{source_prompt}\n{dialogue}", template, "scene"),
                 "motion": scene_motion_for_type(visual_type, idx),
                 "transition": scene_transition_for_index(idx, scene_count, visual_type),
-                "text_policy": "场景图默认不渲染可读文字；口播里的服务名、金额、按钮名和平台名只作为语义锚点。",
+                "text_policy": "场景图允许 1-2 个短词、警示词或数字数据锚点；界面长文字、按钮名和免责声明不直接入画。",
                 "safe_area": "主体不压底部字幕区，手机屏幕和人物动作留在画面中上区域。",
                 "image_prompt": source_prompt,
             }
@@ -1710,7 +1710,7 @@ def build_video_spec(project_id: int, content: str | None = None) -> dict[str, A
             "style": style,
             "domain": domain,
             "channel_binding": channel_visual_style_hint(template, "scene"),
-            "scene_text_policy": "场景图尽量无字，文字信息交给字幕和后期叠加。",
+            "scene_text_policy": "场景图少字强钩子：允许 1-2 个短词或数据 callout，长说明交给字幕和后期叠加。",
             "cover_text_policy": "只有封面主标题、副标题和频道角标可以清晰可读。",
         },
         "scene_count": len(scenes),
@@ -2325,9 +2325,17 @@ def abstract_textual_clause(clause: str, purpose: str) -> str:
     if any(token in text for token in ("标题", "副标题", "主标题", "大字")):
         if purpose == "cover":
             return "保留一块干净标题安全区作为后期叠字位置，但图内不要直接渲染任何可读标题"
+        if any(token in text for token in ("短标签", "警示词", "数据", "数字", "callout", "钩子")):
+            return "保留一个醒目的短词或数字 callout 区，只允许 1-2 个清晰中文字或数字，禁止长段正文"
         return "保留一块无字视觉焦点区域，只呈现图形、色块或物体关系，不出现可读标题"
     cleaned = text
-    cleaned = re.sub(r"[「“\"].+?[」”\"]", "抽象不可读图形标记", cleaned)
+    def quote_replacement(match: re.Match[str]) -> str:
+        value = clean_text(match.group(0)).strip("「」“”\"")
+        if 1 <= len(value) <= 14 and not _contains_any(value, ("免责声明", "内容基于", "仅作", "水印", "Logo", "logo")):
+            return f"短标签「{value}」"
+        return "抽象不可读图形标记"
+
+    cleaned = re.sub(r"[「“\"].+?[」”\"]", quote_replacement, cleaned)
     cleaned = re.sub(r"\b\d{4}\s*年?", "阶段节点", cleaned)
     cleaned = re.sub(r"\b\d+\s*[:：]\s*\d+\b", "结构节点", cleaned)
     cleaned = re.sub(r"(小字|铅笔字|手写黑体|字样|文字|一行|标注|标出|显示)", "不可读图形", cleaned)
@@ -2658,15 +2666,21 @@ def neutralize_scene_rendered_text_targets(text: str) -> str:
         "多个相关渠道",
         cleaned,
     )
-    cleaned = re.sub(r"[「“\"']([^」”\"']{1,30})[」”\"']", "对应概念", cleaned)
+    def quote_replacement(match: re.Match[str]) -> str:
+        value = clean_text(match.group(1))
+        if 1 <= len(value) <= 14 and not _contains_any(value, ("免责声明", "内容基于", "仅作", "水印", "Logo", "logo")):
+            return f"短标签「{value}」"
+        return "对应概念"
+
+    cleaned = re.sub(r"[「“\"']([^」”\"']{1,30})[」”\"']", quote_replacement, cleaned)
     cleaned = re.sub(r"[A-Za-z0-9\u4e00-\u9fff]{1,16}会员", "某项服务", cleaned)
-    cleaned = re.sub(r"(?:¥|￥)?\d+(?:\.\d+)?\s*(?:元|块|角|毛|人民币)?", "金额符号", cleaned)
+    cleaned = re.sub(r"(?:¥|￥)?\d+(?:\.\d+)?\s*(?:元|块|角|毛|人民币)?", "小型金额数字卡", cleaned)
     cleaned = re.sub(r"(?:手机|屏幕|系统|扣费|付款|账单|服务|应用|App)?(?:短信|通知|弹窗|提示)", "无字提醒", cleaned)
     cleaned = re.sub(r"(?:手机|付款|扣费|消费|服务|应用|App)?账单", "无字账单卡片", cleaned)
     cleaned = cleaned.replace("无字账单卡片提醒", "无字账单卡片")
     cleaned = cleaned.replace("多个相关渠道通道", "多个相关渠道")
     if _contains_any(cleaned, ("短信", "通知", "账单", "页面", "按钮", "列表", "表格", "评论区", "标签", "标题", "弹窗", "卡片")):
-        cleaned = f"{cleaned}；所有界面文字不可读，只保留图标、色块、短线和动作关系"
+        cleaned = f"{cleaned}；界面细节不可读，只保留图标、色块、短线和动作关系，画面外可有 1-2 个清晰短词或数字 callout"
     return cleaned
 
 
@@ -2745,11 +2759,67 @@ def image_text_policy_clauses(raw_text: str, purpose: str) -> list[str]:
             "只有封面主标题、副标题和频道角标可以作为可读文字",
             "口播里的服务名、金额、按钮名、平台名和引号内容只作为语义锚点，不额外原样写进画面",
         ]
+    readable_hint = scene_readable_callout_clause(raw_text)
     return [
-        "场景图默认不渲染可读文字；手机屏幕、账单、按钮、通知、评论区和表格都用无字界面、模糊短线、图标、色块或动作关系表达",
-        "口播里的服务名、金额、按钮名、平台名和引号内容只作为语义锚点，不原样变成画面文字",
+        readable_hint,
+        "场景图允许少量可读文字：只保留 1-2 个短词、警示词或数字数据锚点，必须大、短、清楚，像短视频视觉钩子",
+        "手机屏幕、账单、按钮、通知、评论区和表格里的长界面仍用无字界面、模糊短线、图标、色块或动作关系表达",
         "每张图只服务当前口播段落，不把前一段的示例、名词或页面样式扩散到其它镜头",
     ]
+
+
+def extract_scene_readable_callouts(text: str, limit: int = 4) -> list[str]:
+    cleaned = clean_text(text)
+    if not cleaned:
+        return []
+    candidates: list[str] = []
+
+    def add(value: str) -> None:
+        value = clean_text(value).strip("「」“”\"'，。；:： ")
+        if not value:
+            return
+        if len(value) > 14:
+            return
+        if _contains_any(value, ("免责声明", "内容基于", "仅作", "水印", "Logo", "logo")):
+            return
+        if value not in candidates:
+            candidates.append(value)
+
+    for match in re.finditer(r"[「“\"']([^」”\"']{1,14})[」”\"']", cleaned):
+        add(match.group(1))
+    patterns = (
+        r"(?:TOP|Top|top)\s*\d+",
+        r"\d+(?:\.\d+)?\s*%",
+        r"(?<![A-Za-z])(?:¥|￥|\$)?\d+(?:\.\d+)?\s*(?:元|块|美元|亿|万|万人|人|个月|分钟|小时|天|年|倍|GB|MB)?",
+    )
+    for pattern in patterns:
+        for match in re.finditer(pattern, cleaned):
+            add(match.group(0))
+    if "AI" in cleaned and _contains_any(cleaned, ("工作", "替代", "裁员", "饭碗", "岗位")):
+        add("AI抢工作")
+    keyword_groups = (
+        ("先别慌", ("别慌", "别急", "先别")),
+        ("真相", ("真相", "其实", "背后")),
+        ("风险", ("风险", "危险", "陷阱", "扣费", "骗局")),
+        ("省时间", ("效率", "省", "时间", "自动化")),
+        ("谁在怕", ("谁在怕", "焦虑")),
+    )
+    for label, tokens in keyword_groups:
+        if any(token in cleaned for token in tokens):
+            add(label)
+    return candidates[:limit]
+
+
+def scene_readable_callout_clause(raw_text: str) -> str:
+    callouts = extract_scene_readable_callouts(raw_text)
+    if callouts:
+        return (
+            f"可读视觉钩子优先从当前口播提炼：{'、'.join(callouts)}；"
+            "从中选 1-2 个做成大字短标签、悬浮数据光牌或角落 callout"
+        )
+    if re.search(r"\d", raw_text or "") or _contains_any(raw_text, ("数据", "增长", "比例", "排名", "成本", "销量", "市场", "趋势")):
+        return "可加入 1 个小型数据 callout：大号数字、趋势箭头或对比光牌，必须服务当前口播"
+    return "可加入 1 个短促视觉钩子词或警示词，来自当前口播，不要套用其它主题词"
 
 
 def visual_anchor_details(raw_text: str, purpose: str) -> list[str]:
@@ -3173,11 +3243,11 @@ def visual_domain_frame(domain: str) -> list[str]:
             "只保留一个核心矛盾，不堆满多组小卡片，让观众第一眼看到胜负、误区或转折",
         ],
         "timeline": [
-            "时间轴领域：用三个场景层次或物件年代差异表现演进，不直接生成年份、数字或可读标签",
+            "时间轴领域：用三个场景层次或物件年代差异表现演进，可保留 1-2 个短年份节点或阶段词，不做密集年表",
             "画面要有从旧到新的空间方向，靠材质、光线和物件状态形成时间感",
         ],
         "data": [
-            "数据趋势领域：把数据抽象成体量、密度、堆叠、流向或高低落差，不直接生成数字图表",
+            "数据趋势领域：把数据做成大号数字、趋势箭头、体量差或高低落差，最多 1-2 个清晰数字，不做密集图表",
             "给画面一个可感知的尺度差，比如巨大装置、小人物参照、堆积物、分层空间或流动光带",
         ],
         "product": [
@@ -3363,12 +3433,13 @@ def optimize_visual_generation_prompt(prompt: str, template: dict[str, Any], pur
     else:
         base_rules.insert(1, "场景图优先表达物体、关系、动作和空间张力，让观众即使静音也能感到正在发生什么")
         base_rules.insert(2, "每张场景图都要有一个可感知的动作峰值、情绪峰值或空间反差峰值，别让人物只是摆拍")
-        base_rules.append("场景图默认不渲染任何可读文字；信息通过人物动作、物件关系、无字界面、图标、色块、光线和空间层次表达")
-        base_rules.append("不要出现左上角栏目名、底部免责声明、产品品牌字、服务名、按钮名、金额、大片印章文字或便签正文")
+        base_rules.append("场景图允许 1-2 个清晰可读的短词、警示词或数字数据锚点，作为第一眼视觉钩子；文字必须大、短、少")
+        base_rules.append("如果当前口播有百分比、金额、排名、人数、时间成本或对比结论，可做成小型数据光牌、趋势箭头、对比数字或角落 callout")
+        base_rules.append("不要出现左上角栏目名、底部免责声明、产品品牌字、长段正文、密集表格、乱码按钮、大片印章文字或便签正文")
 
     if audit_reasons:
         if any("text" in reason for reason in audit_reasons):
-            base_rules.append("去掉画面里所有疑似文字块，改用图标、线条、色块、箭头和无字图形符号表达信息")
+            base_rules.append("清除乱码和长段文字，只保留 1-2 个短词或数字 callout，其余信息改用图标、线条、色块和动作关系表达")
         if any("top_left_text" in reason for reason in audit_reasons):
             base_rules.append("左上角保持干净，只保留小图形装饰，不出现任何字样")
         if any("bottom_text" in reason for reason in audit_reasons):
@@ -6281,7 +6352,7 @@ def build_common_content_system_rules() -> str:
 8. Meta 只保留这些字段：封面副标题、核心观点、时长、推荐发布标题、钩子、互动钩子、免责声明。HKR、评分、叙事原型、说服策略、情绪曲线、节奏策略、callback、黄金前三句都只能内部思考，不要输出到 content.md。
 9. 视频频道的图片提示词必须包含 ### 横屏封面图 (4:3)、### 竖屏封面图 (3:4)、### 场景图；场景图用 1. 2. 3. 编号，数量要匹配脚本时长和语音节奏。
 10. 图片提示词按“频道视觉策略 -> 本期主题 -> 当前口播锚点”分工：频道只给统一质感，单张图只写主体、构图、动作、情绪和字幕安全区；不要把公共风格在每张图里重复 600 字。
-11. 封面标题控制在 5-8 个中文字左右，只配一句短副标题；场景图默认不生成可读文字，必要时只保留 1-3 个短标签，避免长段正文、脚注、免责声明、水印和乱码。
+11. 封面标题控制在 5-8 个中文字左右，只配一句短副标题；场景图允许 1-2 个清晰短词、警示词或数据 callout，优先来自当前口播里的数字、结果、反差或痛点，避免长段正文、脚注、免责声明、水印和乱码。
 12. 每张场景图必须根据对应脚本段落和本期素材重新设计，不要把风格写死成统一背景模板；除非频道模板明确要求。
 """.strip()
 
@@ -7099,7 +7170,7 @@ def build_content_scene_prompt_lines(project: dict[str, Any], template: dict[str
             f"构图：{content_visual_layout_hint(visual_type)}",
             "纪录片镜头感，真实摄影质感，主体突出，高对比光影，有前后景层次",
             "与前后镜头换主体动作、空间关系或视角",
-            "留出后期字幕安全区；默认不生成可读文字，信息用无字界面、图标、色块和动作关系表达",
+            "留出后期字幕安全区；允许 1-2 个短词、警示词或数据 callout，界面长文字仍用无字界面、图标、色块和动作关系表达",
         ]
         line = compact_prompt_rule("，".join(dedupe_clauses([item for item in clauses if clean_text(item)])), 360).strip("，,。") + "。"
         lines.append(line)
@@ -7839,7 +7910,7 @@ def compose_deepseek_messages(
 5. 你的输出必须严格遵守当前模板 prompt 约定的章节、角色标签、图片提示词和时长要求。
 6. 如果频道模板没有明确章节，按原版兼容结构输出：## Meta、## 原始材料简述、视频频道输出 ## 对话脚本 或 ## 口播脚本、## 重点字幕、## 图片提示词、## 参考资料；图文频道输出 ## 正文、## 图片提示词、## 参考资料。
 7. 视频频道的图片提示词必须包含 ### 横屏封面图 (4:3)、### 竖屏封面图 (3:4)、### 场景图；场景图用 1. 2. 3. 编号，数量要匹配脚本时长和语音节奏，通常 3-4 分钟 6 张左右、5-6 分钟 7-10 张左右。
-8. 封面提示词要和频道个人 IP 强关联，允许直接生成清晰可读的中文主标题、短副标题和频道名/作者角标；场景图只允许 1-3 个短标签或警示词，避免长段正文、脚注、免责声明、水印和乱码。
+8. 封面提示词要和频道个人 IP 强关联，允许直接生成清晰可读的中文主标题、短副标题和频道名/作者角标；场景图允许 1-2 个清晰短词、警示词或数据 callout，优先承接当前口播爆点，避免长段正文、脚注、免责声明、水印和乱码。
 9. 每张场景图必须根据对应脚本段落和本期素材重新设计，不要复制同一种纸面手账、档案卡、旧纸、胶带、拼贴背景；除非频道模板或题材明确要求。
 """.strip()
 
@@ -8867,7 +8938,7 @@ IMAGE_APPEAL_SUBJECT_TERMS = ("人物", "老人", "孩子", "妈妈", "爸爸", 
 IMAGE_APPEAL_ACTION_TERMS = ("动作", "拿起", "递给", "挂断", "对视", "打开", "指向", "停住", "冲进", "靠近", "正在", "瞬间")
 IMAGE_APPEAL_CONFLICT_TERMS = ("冲突", "反差", "误区", "骗局", "警惕", "别急", "小心", "真相", "结果", "风险", "痛点", "质疑", "悬念")
 IMAGE_APPEAL_SCENE_TERMS = ("客厅", "饭桌", "街头", "办公室", "门口", "社区", "柜台", "评论区", "聊天", "屏幕", "现场", "空间")
-IMAGE_APPEAL_TEXT_TERMS = ("短标签", "警示词", "标题区", "字幕空间", "留白", "角标", "封面", "可读")
+IMAGE_APPEAL_TEXT_TERMS = ("短标签", "警示词", "标题区", "字幕空间", "留白", "角标", "封面", "可读", "数据", "数字", "callout", "光牌", "钩子")
 
 
 def clamp_number(value: float, low: float, high: float) -> float:
