@@ -12,11 +12,12 @@ const STEP_DEFS = [
 ];
 
 const IMAGE_PROVIDER_OPTIONS = [
-  { value: "auto_no_apiyi", label: "自动选择（不使用 APIYI）" },
+  { value: "auto_no_apiyi", label: "自动选择（不使用第三方接口）" },
   { value: "ark", label: "火山方舟 Seedream" },
+  { value: "third_party", label: "第三方 OpenAI 兼容" },
   { value: "chatgpt_web_auto", label: "ChatGPT 网页自动化" },
   { value: "chatgpt_handoff", label: "ChatGPT 网页/桌面接力" },
-  { value: "apiyi", label: "OpenAI 兼容 / API易" },
+  { value: "apiyi", label: "API易 / OpenAI 兼容" },
   { value: "auto", label: "自动选择（原逻辑）" },
 ];
 

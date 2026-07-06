@@ -1811,6 +1811,13 @@ def resolve_apiyi_image_model(env: dict[str, str]) -> str:
     return APIYI_IMAGE_MODEL_ALIASES.get(raw, raw)
 
 
+def resolve_third_party_image_model(env: dict[str, str]) -> str:
+    raw = (env.get("THIRD_PARTY_IMAGE_MODEL", "") or "").strip()
+    if not raw:
+        return "gpt-image-2-all"
+    return APIYI_IMAGE_MODEL_ALIASES.get(raw, raw)
+
+
 def normalize_openai_compatible_base_url(value: str) -> str:
     text = clean_text(value).rstrip("/")
     if not text:
@@ -1858,8 +1865,32 @@ def apiyi_image_timeout(env: dict[str, str]) -> float:
         return APIYI_IMAGE_TIMEOUT_SECONDS
 
 
+def third_party_image_timeout(env: dict[str, str]) -> float:
+    value = clean_text(
+        env.get("THIRD_PARTY_IMAGE_TIMEOUT_SECONDS")
+        or env.get("IMAGE_GENERATION_TIMEOUT_SECONDS")
+        or ""
+    )
+    if not value:
+        return APIYI_IMAGE_TIMEOUT_SECONDS
+    try:
+        return max(300.0, min(float(value), 1800.0))
+    except ValueError:
+        return APIYI_IMAGE_TIMEOUT_SECONDS
+
+
 def apiyi_image_retries(env: dict[str, str]) -> int:
     value = clean_text(env.get("APIYI_IMAGE_RETRIES") or "")
+    if not value:
+        return APIYI_IMAGE_RETRIES
+    try:
+        return max(1, min(int(value), 8))
+    except ValueError:
+        return APIYI_IMAGE_RETRIES
+
+
+def third_party_image_retries(env: dict[str, str]) -> int:
+    value = clean_text(env.get("THIRD_PARTY_IMAGE_RETRIES") or "")
     if not value:
         return APIYI_IMAGE_RETRIES
     try:
@@ -4508,20 +4539,37 @@ def apiyi_image_available(env: dict[str, str]) -> bool:
     return bool(api_key and base_url)
 
 
+def third_party_image_available(env: dict[str, str]) -> bool:
+    api_key = (env.get("THIRD_PARTY_IMAGE_API_KEY", "") or "").strip()
+    base_url = normalize_openai_compatible_base_url(env.get("THIRD_PARTY_IMAGE_BASE_URL", "") or "")
+    return bool(api_key and base_url)
+
+
 def resolve_image_provider(env: dict[str, str]) -> dict[str, str]:
     preference = clean_text(env.get("IMAGE_PROVIDER") or "auto").lower() or "auto"
     prefer_apiyi = env_flag(env.get("APIYI_IMAGE_REPLACE_ARK"))
     has_apiyi = apiyi_image_available(env)
+    has_third_party = third_party_image_available(env)
     has_ark = bool((env.get("ARK_API_KEY", "") or "").strip())
 
     if preference in {"chatgpt_web_auto", "chatgpt-auto", "chatgpt_auto", "chatgpt_browser"}:
         return {"key": "chatgpt_web_auto", "label": "ChatGPT 网页自动化", "model": "chatgpt-account"}
     if preference in {"chatgpt", "chatgpt_handoff", "chatgpt-web", "chatgpt_web"}:
         return {"key": "chatgpt_handoff", "label": "ChatGPT 网页/桌面接力", "model": "chatgpt-account"}
-    if preference in {"apiyi", "openai_compatible", "openai-compatible"}:
+    if preference in {"third_party", "third-party", "custom_openai", "custom-openai", "openai_custom", "openai-custom"}:
+        if not has_third_party:
+            raise RuntimeError("已选择第三方 OpenAI 兼容出图，但 THIRD_PARTY_IMAGE_API_KEY 或 THIRD_PARTY_IMAGE_BASE_URL 还没填完整。")
+        return {"key": "third_party", "label": "第三方 OpenAI 兼容文生图", "model": resolve_third_party_image_model(env)}
+    if preference in {"apiyi"}:
         if not has_apiyi:
             raise RuntimeError("已选择 OpenAI 兼容/API易出图，但 APIYI_API_KEY 或 APIYI_BASE_URL 还没填完整。")
-        return {"key": "apiyi", "label": "OpenAI 兼容文生图", "model": resolve_apiyi_image_model(env)}
+        return {"key": "apiyi", "label": "API易 / OpenAI 兼容文生图", "model": resolve_apiyi_image_model(env)}
+    if preference in {"openai_compatible", "openai-compatible"}:
+        if has_third_party:
+            return {"key": "third_party", "label": "第三方 OpenAI 兼容文生图", "model": resolve_third_party_image_model(env)}
+        if has_apiyi:
+            return {"key": "apiyi", "label": "API易 / OpenAI 兼容文生图", "model": resolve_apiyi_image_model(env)}
+        raise RuntimeError("已选择 OpenAI 兼容出图，但第三方/APIYI 配置都不完整。")
     if preference in {"ark", "seedream", "doubao"}:
         if not has_ark:
             raise RuntimeError("已选择火山方舟出图，但 ARK_API_KEY 还没填写。")
@@ -4530,31 +4578,36 @@ def resolve_image_provider(env: dict[str, str]) -> dict[str, str]:
     if prefer_apiyi:
         if not has_apiyi:
             raise RuntimeError("已开启 OpenAI 兼容出图，但 APIYI_API_KEY 或 APIYI_BASE_URL 还没填完整。")
-        return {"key": "apiyi", "label": "OpenAI 兼容文生图", "model": resolve_apiyi_image_model(env)}
+        return {"key": "apiyi", "label": "API易 / OpenAI 兼容文生图", "model": resolve_apiyi_image_model(env)}
     if has_ark:
         return {"key": "ark", "label": "火山方舟 Seedream", "model": resolve_ark_image_model(env)}
+    if has_third_party:
+        return {"key": "third_party", "label": "第三方 OpenAI 兼容文生图", "model": resolve_third_party_image_model(env)}
     if has_apiyi:
-        return {"key": "apiyi", "label": "OpenAI 兼容文生图", "model": resolve_apiyi_image_model(env)}
+        return {"key": "apiyi", "label": "API易 / OpenAI 兼容文生图", "model": resolve_apiyi_image_model(env)}
     raise RuntimeError("未配置可用的文生图服务。请先配置方舟密钥，或填写 OpenAI 兼容文生图配置。")
 
 
 def resolve_image_provider_queue(env: dict[str, str]) -> list[dict[str, str]]:
     """Return image providers in failover order.
 
-    auto_no_apiyi intentionally skips APIYI so image generation never waits on
-    that account. Explicit IMAGE_PROVIDER values are strict and do not silently
-    fall back to another provider.
+    auto_no_apiyi intentionally skips third-party/OpenAI-compatible accounts so
+    image generation never waits on those services. Explicit IMAGE_PROVIDER
+    values are strict and do not silently fall back to another provider.
     """
     preference = clean_text(env.get("IMAGE_PROVIDER") or "auto").lower() or "auto"
     has_ark = bool((env.get("ARK_API_KEY", "") or "").strip())
     has_apiyi = apiyi_image_available(env)
+    has_third_party = third_party_image_available(env)
     allow_chatgpt_auto = not env.get("CHATGPT_IMAGE_AUTO_OPEN") or env_flag(env.get("CHATGPT_IMAGE_AUTO_OPEN"))
 
     def record(key: str) -> dict[str, str]:
         if key == "ark":
             return {"key": "ark", "label": "火山方舟 Seedream", "model": resolve_ark_image_model(env)}
         if key == "apiyi":
-            return {"key": "apiyi", "label": "OpenAI 兼容文生图", "model": resolve_apiyi_image_model(env)}
+            return {"key": "apiyi", "label": "API易 / OpenAI 兼容文生图", "model": resolve_apiyi_image_model(env)}
+        if key == "third_party":
+            return {"key": "third_party", "label": "第三方 OpenAI 兼容文生图", "model": resolve_third_party_image_model(env)}
         if key == "chatgpt_web_auto":
             return {"key": "chatgpt_web_auto", "label": "ChatGPT 网页自动化", "model": "chatgpt-account"}
         if key == "chatgpt_handoff":
@@ -4569,7 +4622,7 @@ def resolve_image_provider_queue(env: dict[str, str]) -> list[dict[str, str]]:
             providers.append(record("chatgpt_web_auto"))
         if providers:
             return providers
-        raise RuntimeError("未配置可用的非 APIYI 图片生成渠道。")
+        raise RuntimeError("未配置可用的非第三方图片生成渠道。")
 
     if preference in {"ark", "seedream", "doubao"}:
         if not has_ark:
@@ -4580,10 +4633,20 @@ def resolve_image_provider_queue(env: dict[str, str]) -> list[dict[str, str]]:
         return [record("chatgpt_web_auto")]
     if preference in {"chatgpt", "chatgpt_handoff", "chatgpt-web", "chatgpt_web"}:
         return [record("chatgpt_handoff")]
-    if preference in {"apiyi", "openai_compatible", "openai-compatible"}:
+    if preference in {"third_party", "third-party", "custom_openai", "custom-openai", "openai_custom", "openai-custom"}:
+        if not has_third_party:
+            raise RuntimeError("已选择第三方 OpenAI 兼容出图，但第三方配置不完整。")
+        return [record("third_party")]
+    if preference in {"apiyi"}:
         if not has_apiyi:
             raise RuntimeError("已选择 APIYI，但 APIYI 配置不完整。")
         return [record("apiyi")]
+    if preference in {"openai_compatible", "openai-compatible"}:
+        if has_third_party:
+            return [record("third_party")]
+        if has_apiyi:
+            return [record("apiyi")]
+        raise RuntimeError("已选择 OpenAI 兼容出图，但第三方/APIYI 配置都不完整。")
 
     return [resolve_image_provider(env)]
 
@@ -4600,6 +4663,28 @@ def describe_image_provider_queue(env: dict[str, str]) -> str:
     return f"已锁定图片入口：{labels}；失败将直接报错，不自动切换"
 
 
+def openai_compatible_image_config(env: dict[str, str], provider_key: str) -> dict[str, Any]:
+    if provider_key == "third_party":
+        return {
+            "key": "third_party",
+            "label": "第三方 OpenAI 兼容文生图",
+            "api_key": (env.get("THIRD_PARTY_IMAGE_API_KEY", "") or "").strip(),
+            "base_url": normalize_openai_compatible_base_url(env.get("THIRD_PARTY_IMAGE_BASE_URL", "") or ""),
+            "model": resolve_third_party_image_model(env),
+            "timeout": third_party_image_timeout(env),
+            "retries": third_party_image_retries(env),
+        }
+    return {
+        "key": "apiyi",
+        "label": "API易 / OpenAI 兼容文生图",
+        "api_key": (env.get("APIYI_API_KEY", "") or "").strip(),
+        "base_url": normalize_openai_compatible_base_url(env.get("APIYI_BASE_URL", "") or ""),
+        "model": resolve_apiyi_image_model(env),
+        "timeout": apiyi_image_timeout(env),
+        "retries": apiyi_image_retries(env),
+    }
+
+
 def generate_openai_compatible_image(
     prompt: str,
     output_path: Path,
@@ -4607,16 +4692,19 @@ def generate_openai_compatible_image(
     purpose: str,
     env: dict[str, str],
     log: Callable[[str], None] | None = None,
+    provider_key: str = "apiyi",
 ) -> Path:
     del purpose
-    api_key = (env.get("APIYI_API_KEY", "") or "").strip()
-    base_url = normalize_openai_compatible_base_url(env.get("APIYI_BASE_URL", "") or "")
+    config = openai_compatible_image_config(env, provider_key)
+    api_key = str(config["api_key"])
+    base_url = str(config["base_url"])
+    label = str(config["label"])
     if not api_key:
-        raise RuntimeError("APIYI_API_KEY 未配置，无法调用 OpenAI 兼容文生图。")
+        raise RuntimeError(f"{label} API Key 未配置，无法调用 OpenAI 兼容文生图。")
     if not base_url:
-        raise RuntimeError("APIYI_BASE_URL 未配置，无法调用 OpenAI 兼容文生图。")
+        raise RuntimeError(f"{label} Base URL 未配置，无法调用 OpenAI 兼容文生图。")
 
-    model = resolve_apiyi_image_model(env)
+    model = str(config["model"])
     clean_prompt = apply_apiyi_prompt_conventions(prompt, size)
     payload: dict[str, Any] = {
         "model": model,
@@ -4626,8 +4714,8 @@ def generate_openai_compatible_image(
     headers = {"Authorization": f"Bearer {api_key}", "Accept": "application/json"}
     output_path.parent.mkdir(parents=True, exist_ok=True)
     last_exc: RuntimeError | None = None
-    request_timeout = apiyi_image_timeout(env)
-    max_retries = apiyi_image_retries(env)
+    request_timeout = float(config["timeout"])
+    max_retries = int(config["retries"])
     endpoint = f"{base_url}/images/generations"
     for attempt in range(1, max_retries + 1):
         payload["response_format"] = "b64_json"
@@ -4635,7 +4723,7 @@ def generate_openai_compatible_image(
             started = time.monotonic()
             if log:
                 log(
-                    f"[images] APIYI POST /v1/images/generations model={model} "
+                    f"[images] {label} POST /v1/images/generations model={model} "
                     f"response_format=b64_json attempt={attempt}/{max_retries} timeout={request_timeout:.0f}s"
                 )
             try:
@@ -4651,7 +4739,7 @@ def generate_openai_compatible_image(
                 if "response_format" in message or "b64_json" in message:
                     payload["response_format"] = "url"
                     if log:
-                        log("[images] APIYI b64_json response_format not accepted; retrying same attempt with url")
+                        log(f"[images] {label} b64_json response_format not accepted; retrying same attempt with url")
                     response = _request_provider_json(
                         "POST",
                         endpoint,
@@ -4662,23 +4750,23 @@ def generate_openai_compatible_image(
                 else:
                     raise
             if log:
-                log(f"[images] APIYI response received in {time.monotonic() - started:.1f}s; downloading/decoding image")
+                log(f"[images] {label} response received in {time.monotonic() - started:.1f}s; downloading/decoding image")
             image_data = _extract_provider_image_bytes(response, timeout=request_timeout)
             output_path.write_bytes(image_data)
             storage.write_text(output_path.with_suffix(".md"), clean_prompt + "\n")
             if log:
-                log(f"[images] APIYI saved {output_path.name} ({len(image_data) / 1048576.0:.1f} MB)")
+                log(f"[images] {label} saved {output_path.name} ({len(image_data) / 1048576.0:.1f} MB)")
             return output_path
         except RuntimeError as exc:
             last_exc = exc
             if log:
                 elapsed = time.monotonic() - started if "started" in locals() else 0.0
-                log(f"[images] APIYI attempt {attempt}/{max_retries} failed after {elapsed:.1f}s: {exc}")
+                log(f"[images] {label} attempt {attempt}/{max_retries} failed after {elapsed:.1f}s: {exc}")
             if attempt >= max_retries:
                 break
             delay = min(6, attempt * 2)
             if log:
-                log(f"[images] APIYI retrying in {delay}s")
+                log(f"[images] {label} retrying in {delay}s")
             time.sleep(delay)
     if last_exc is not None:
         raise last_exc
@@ -4731,8 +4819,16 @@ def generate_configured_image(
                     last_path = generate_chatgpt_web_auto_image(prepared_prompt, output_path, size, purpose, env, log=log)
                 elif provider["key"] == "chatgpt_handoff":
                     last_path = generate_chatgpt_handoff_image(prepared_prompt, output_path, size, purpose, env, log=log)
-                elif provider["key"] == "apiyi":
-                    last_path = generate_openai_compatible_image(prepared_prompt, output_path, size, purpose, env, log=log)
+                elif provider["key"] in {"apiyi", "third_party"}:
+                    last_path = generate_openai_compatible_image(
+                        prepared_prompt,
+                        output_path,
+                        size,
+                        purpose,
+                        env,
+                        log=log,
+                        provider_key=provider["key"],
+                    )
                 else:
                     last_path = generate_ark_image(prepared_prompt, output_path, size, purpose, env)
 
@@ -11241,7 +11337,7 @@ class JobRuntime:
                 return True, scene_lines
             add(f"[images] 正在调用 {provider['label']} 生成 {len(scene_jobs)} 张场景图")
             add(f"[images] {provider_desc}")
-            if provider["key"] == "apiyi":
+            if provider["key"] in {"apiyi", "third_party"}:
                 add("[images] OpenAI 兼容文生图单张通常需要几十秒；已切换为稳态串行生成，逐张完成后再进入下一张")
             if provider["key"] == "chatgpt_handoff":
                 add("[images] ChatGPT 接力模式：会逐张打开提示词并等待目标图片文件保存完成")
@@ -11318,7 +11414,7 @@ class JobRuntime:
                     return True, scene_lines
                 add("[covers] 续跑模式：只补缺失封面，保留已有封面")
             add(f"[covers] {provider_desc}")
-            if provider["key"] == "apiyi":
+            if provider["key"] in {"apiyi", "third_party"}:
                 add("[covers] OpenAI 兼容文生图封面已切换为串行生成")
             if provider["key"] == "chatgpt_handoff":
                 add("[covers] ChatGPT 接力模式：会逐张打开提示词并等待目标封面文件保存完成")

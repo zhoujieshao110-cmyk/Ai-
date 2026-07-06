@@ -245,13 +245,17 @@ def validate_ark_image(values: dict[str, str]) -> dict[str, Any]:
     )
 
 
-def validate_apiyi_image(values: dict[str, str]) -> dict[str, Any]:
-    api_key = values.get("APIYI_API_KEY", "").strip()
+def _validate_openai_compatible_image(
+    result_key: str,
+    title: str,
+    api_key: str,
+    base_url_value: str,
+    model: str,
+) -> dict[str, Any]:
     services = _services()
-    base_url = services.normalize_openai_compatible_base_url(values.get("APIYI_BASE_URL", "") or "")
-    model = services.resolve_apiyi_image_model(values)
+    base_url = services.normalize_openai_compatible_base_url(base_url_value or "")
     if not api_key or not base_url:
-        return _result("apiyi_image", "unconfigured", "请先填写 OpenAI 兼容 API 密钥和 Base URL。")
+        return _result(result_key, "unconfigured", f"请先填写 {title} API 密钥和 Base URL。")
 
     response = _request_json(
         "GET",
@@ -263,38 +267,60 @@ def validate_apiyi_image(values: dict[str, str]) -> dict[str, Any]:
         models = [item.get("id", "") for item in payload.get("data", []) if isinstance(item, dict)]
         if model and models and model not in models:
             return _result(
-                "apiyi_image",
+                result_key,
                 "warning",
-                f"兼容接口已连通，但模型 {model} 不在 /models 返回列表里。",
+                f"{title} 已连通，但模型 {model} 不在 /models 返回列表里。",
                 {"models": models[:30], "base_url": base_url},
             )
         return _result(
-            "apiyi_image",
+            result_key,
             "success",
-            f"OpenAI 兼容文生图校验通过，当前模型 {model} 可以使用。",
+            f"{title} 校验通过，当前模型 {model} 可以使用。",
             {"models": models[:30], "base_url": base_url},
         )
     if _contains_domain_route_error(response.get("text", "")):
         return _result(
-            "apiyi_image",
+            result_key,
             "error",
             "当前 Base URL 返回了“域名解析错误”，说明这条网关地址本身没有正确转发到 OpenAI 兼容接口。",
             {"base_url": base_url},
         )
     if response["status"] in {401, 403}:
-        return _result("apiyi_image", "error", "OpenAI 兼容 API 密钥无效，接口返回了鉴权失败。")
+        return _result(result_key, "error", f"{title} API 密钥无效，接口返回了鉴权失败。")
     if response["status"] in {404, 405}:
         return _result(
-            "apiyi_image",
+            result_key,
             "warning",
             "当前服务没有开放 /models 校验接口，无法零成本验证密钥；保存后可以直接试跑场景图或封面图。",
             {"base_url": base_url, "model": model},
         )
     return _result(
-        "apiyi_image",
+        result_key,
         "error",
-        f"OpenAI 兼容文生图校验失败：HTTP {response['status'] or 'ERR'}。",
+        f"{title} 校验失败：HTTP {response['status'] or 'ERR'}。",
         {"body": response.get("text", "")[:300], "error": response.get("error", ""), "base_url": base_url},
+    )
+
+
+def validate_apiyi_image(values: dict[str, str]) -> dict[str, Any]:
+    services = _services()
+    return _validate_openai_compatible_image(
+        "apiyi_image",
+        "API易 / OpenAI 兼容文生图",
+        values.get("APIYI_API_KEY", "").strip(),
+        values.get("APIYI_BASE_URL", "") or "",
+        services.resolve_apiyi_image_model(values),
+    )
+
+
+def validate_third_party_image(values: dict[str, str]) -> dict[str, Any]:
+    services = _services()
+    return _validate_openai_compatible_image(
+        "third_party_image",
+        "第三方 OpenAI 兼容文生图",
+        values.get("THIRD_PARTY_IMAGE_API_KEY", "").strip(),
+        values.get("THIRD_PARTY_IMAGE_BASE_URL", "") or "",
+        services.resolve_third_party_image_model(values),
     )
 
 
@@ -438,6 +464,7 @@ SECTION_VALIDATORS = {
     "tavily": validate_tavily,
     "ark_image": validate_ark_image,
     "apiyi_image": validate_apiyi_image,
+    "third_party_image": validate_third_party_image,
     "doubao_tts": validate_volc_tts,
     "volc_asr": validate_volc_asr,
     "social_auto_upload": validate_social_auto_upload,
