@@ -14,6 +14,7 @@ const STEP_DEFS = [
 const IMAGE_PROVIDER_OPTIONS = [
   { value: "auto_no_apiyi", label: "自动选择（不使用第三方接口）" },
   { value: "ark", label: "火山方舟 Seedream" },
+  { value: "imageai_playground", label: "GPT Image Playground 网页" },
   { value: "newapi", label: "NewAPI / OpenAI Image" },
   { value: "third_party", label: "第三方 OpenAI 兼容" },
   { value: "chatgpt_web_auto", label: "ChatGPT 网页自动化" },

@@ -1818,6 +1818,18 @@ def resolve_third_party_image_model(env: dict[str, str]) -> str:
     return APIYI_IMAGE_MODEL_ALIASES.get(raw, raw)
 
 
+def is_openai_compatible_connection_stub(model: str) -> bool:
+    text = clean_text(model).lower()
+    if not text:
+        return False
+    return text in {
+        "newapi_channel_conn",
+        "newapi_channel",
+        "channel_conn",
+        "channel_connection",
+    } or text.endswith("_channel_conn")
+
+
 def normalize_openai_compatible_base_url(value: str) -> str:
     text = clean_text(value).rstrip("/")
     if not text:
@@ -1912,6 +1924,16 @@ def chatgpt_image_wait_seconds(env: dict[str, str]) -> float:
     value = clean_text(env.get("CHATGPT_IMAGE_WAIT_SECONDS") or "")
     if not value:
         return 900.0
+    try:
+        return max(60.0, min(float(value), 7200.0))
+    except ValueError:
+        return 900.0
+
+
+def imageai_playground_wait_seconds(env: dict[str, str]) -> float:
+    value = clean_text(env.get("IMAGEAI_PLAYGROUND_WAIT_SECONDS") or "")
+    if not value:
+        return chatgpt_image_wait_seconds(env)
     try:
         return max(60.0, min(float(value), 7200.0))
     except ValueError:
@@ -3605,8 +3627,11 @@ def _request_provider_json(
             return parsed
     except urllib.error.HTTPError as exc:
         body = exc.read().decode("utf-8", errors="ignore")
-        if "域名解析错误" in body:
-            raise RuntimeError("当前 OpenAI 兼容网关返回“域名解析错误”，说明这条 Base URL 没有正确转发到图片接口。") from exc
+        body_lower = body.lower()
+        if "域名解析错误" in body or "鍩熷悕瑙ｆ瀽閿欒" in body or ("domain" in body_lower and "error" in body_lower):
+            raise RuntimeError(
+                "OpenAI 兼容网关返回“域名解析错误”：Base URL 已连通，但 NewAPI 后台渠道、分组或模型路由可能指向了不可解析的上游域名。请确认 token 分组有可用图片模型，模型 ID 不要填 newapi_channel_conn。"
+            ) from exc
         detail = clean_text(body)[:400]
         raise RuntimeError(f"HTTP {exc.code}: {detail or '图片接口返回错误'}") from exc
     except urllib.error.URLError as exc:
@@ -4512,6 +4537,280 @@ def generate_chatgpt_web_auto_image(
             close_chatgpt_browser_context(context, log=log if saved_ok else None)
 
 
+def default_imageai_playground_profile_dir() -> Path:
+    return storage.CONFIG_ROOT / "imageai-playground-profile"
+
+
+def imageai_playground_user_data_dir(env: dict[str, str]) -> Path:
+    configured = clean_text(env.get("IMAGEAI_PLAYGROUND_USER_DATA_DIR") or "")
+    if configured:
+        return Path(configured)
+    return default_imageai_playground_profile_dir()
+
+
+def build_imageai_playground_prompt(prompt: str, size: str, purpose: str) -> str:
+    del size, purpose
+    return normalize_image_prompt(prompt)
+
+
+def imageai_playground_launch_url(env: dict[str, str]) -> str:
+    app_url = clean_text(env.get("IMAGEAI_PLAYGROUND_URL") or "https://imageai.centos.hk/") or "https://imageai.centos.hk/"
+    parsed = urllib.parse.urlsplit(app_url)
+    if parsed.netloc:
+        scheme = parsed.scheme or "https"
+        netloc = parsed.netloc
+        path = parsed.path or "/"
+    else:
+        scheme = "https"
+        netloc = parsed.path.rstrip("/")
+        path = "/"
+    query = dict(urllib.parse.parse_qsl(parsed.query, keep_blank_values=True))
+    if not env_flag(env.get("IMAGEAI_PLAYGROUND_USE_SAVED_SETTINGS", "true")):
+        api_key = (env.get("THIRD_PARTY_IMAGE_API_KEY", "") or "").strip()
+        base_url = normalize_openai_compatible_base_url(env.get("THIRD_PARTY_IMAGE_BASE_URL", "") or "https://ai.centos.hk/v1")
+        if not api_key:
+            raise RuntimeError("GPT Image Playground 配置注入模式需要先填写 THIRD_PARTY_IMAGE_API_KEY。")
+        if not base_url:
+            raise RuntimeError("GPT Image Playground 配置注入模式需要先填写 THIRD_PARTY_IMAGE_BASE_URL。")
+        query.update({"apiUrl": base_url, "apiKey": api_key, "apiMode": "images"})
+    return urllib.parse.urlunsplit((scheme, netloc, path, urllib.parse.urlencode(query), parsed.fragment))
+
+
+def _fill_imageai_playground_prompt(page: Any, prompt: str, timeout_seconds: float = 120.0) -> None:
+    selectors = [
+        "textarea[placeholder*='描述']",
+        "textarea[placeholder*='提示']",
+        "textarea",
+        "input[placeholder*='描述']",
+        "input[placeholder*='提示']",
+    ]
+    deadline = time.monotonic() + timeout_seconds
+    last_error = ""
+    while time.monotonic() < deadline:
+        for selector in selectors:
+            locator = page.locator(selector).last
+            try:
+                if locator.count() and locator.is_visible(timeout=600) and locator.is_enabled(timeout=600):
+                    locator.evaluate(
+                        """
+(el, text) => {
+  el.scrollIntoView({ block: "center", inline: "nearest" });
+  el.focus();
+  const proto = el.tagName === "TEXTAREA" ? window.HTMLTextAreaElement.prototype : window.HTMLInputElement.prototype;
+  const setter = Object.getOwnPropertyDescriptor(proto, "value")?.set;
+  if (setter) setter.call(el, text);
+  else el.value = text;
+  el.dispatchEvent(new InputEvent("input", { bubbles: true, inputType: "insertText", data: text }));
+  el.dispatchEvent(new Event("change", { bubbles: true }));
+}
+""",
+                        prompt,
+                    )
+                    return
+            except Exception as exc:
+                last_error = str(exc)
+        page.wait_for_timeout(1000)
+    raise RuntimeError("GPT Image Playground 没有找到可编辑的提示词输入框。" + (f" 最近错误：{last_error}" if last_error else ""))
+
+
+def _click_imageai_playground_generate(page: Any) -> None:
+    result = page.evaluate(
+        """
+() => {
+  const isVisible = (el) => {
+    if (!el) return false;
+    const rect = el.getBoundingClientRect();
+    const style = window.getComputedStyle(el);
+    return rect.width > 0 && rect.height > 0 && style.visibility !== "hidden" && style.display !== "none";
+  };
+  const textOf = (el) => [
+    el.innerText || "",
+    el.getAttribute("aria-label") || "",
+    el.getAttribute("title") || "",
+    el.getAttribute("data-testid") || ""
+  ].join(" ").trim();
+  const prompt = Array.from(document.querySelectorAll("textarea, input")).reverse().find((el) => {
+    if (!isVisible(el) || el.disabled) return false;
+    const ph = el.getAttribute("placeholder") || "";
+    return ph.includes("描述") || ph.includes("提示") || (el.value && el.value.length > 20);
+  });
+  if (!prompt) return { ok: false, reason: "prompt input not found" };
+  let node = prompt;
+  for (let depth = 0; node && depth < 8; depth += 1, node = node.parentElement) {
+    const buttons = Array.from(node.querySelectorAll("button")).filter((button) => isVisible(button) && !button.disabled);
+    if (!buttons.length) continue;
+    const preferred = buttons.find((button) => /生成|发送|提交|generate|send|submit/i.test(textOf(button))) || buttons[buttons.length - 1];
+    preferred.scrollIntoView({ block: "center", inline: "nearest" });
+    preferred.click();
+    return { ok: true, text: textOf(preferred) };
+  }
+  return { ok: false, reason: "generate button not found near prompt input" };
+}
+"""
+    )
+    if isinstance(result, dict) and result.get("ok"):
+        return
+    reason = clean_text(str(result.get("reason") if isinstance(result, dict) else result))
+    raise RuntimeError(f"GPT Image Playground 没有找到生成按钮：{reason or 'unknown'}")
+
+
+def _save_latest_imageai_playground_image(
+    page: Any,
+    before_indexes: set[int],
+    output_path: Path,
+    timeout_seconds: float,
+    log: Callable[[str], None] | None = None,
+) -> Path:
+    deadline = time.monotonic() + timeout_seconds
+    candidate: dict[str, Any] | None = None
+    next_progress_at = 0.0
+    last_error_text = ""
+    while time.monotonic() < deadline:
+        try:
+            images = page.evaluate(_large_chatgpt_images_script())
+        except Exception as exc:
+            raise RuntimeError(f"GPT Image Playground 浏览器连接中断：{exc}") from exc
+        if isinstance(images, list):
+            new_images = [
+                item
+                for item in images
+                if isinstance(item, dict) and int(item.get("index", -1)) not in before_indexes
+            ]
+            if new_images:
+                candidate = new_images[-1]
+                break
+            if images:
+                candidate = images[-1]
+        if log and time.monotonic() >= next_progress_at:
+            remaining = max(0, int(deadline - time.monotonic()))
+            log(f"[images] GPT Image Playground 图片生成等待中，剩余约 {remaining}s")
+            next_progress_at = time.monotonic() + 20.0
+        with contextlib.suppress(Exception):
+            body_text = clean_text(page.locator("body").inner_text(timeout=800))
+            error_markers = ("失败", "错误", "error", "invalid", "unauthorized", "forbidden", "余额", "quota", "429")
+            if any(marker in body_text.lower() for marker in error_markers):
+                last_error_text = body_text[-500:]
+        page.wait_for_timeout(2500)
+    if not candidate:
+        suffix = f" 页面提示：{last_error_text}" if last_error_text else ""
+        raise RuntimeError("GPT Image Playground 已点击生成，但没有检测到生成图片。" + suffix)
+
+    src = str(candidate.get("src") or "")
+    index = int(candidate.get("index", -1))
+    if src:
+        try:
+            payload = page.evaluate(_fetch_image_b64_script(), src)
+            if isinstance(payload, dict) and payload.get("b64"):
+                _write_image_bytes_as_png(base64.b64decode(str(payload["b64"])), output_path)
+                return output_path
+        except Exception:
+            pass
+    if index >= 0:
+        page.locator("img").nth(index).screenshot(path=str(output_path), timeout=30000)
+        return output_path
+    raise RuntimeError("检测到 GPT Image Playground 图片，但无法下载或截图保存。")
+
+
+def cleanup_imageai_playground_history(page: Any, env: dict[str, str], log: Callable[[str], None] | None = None) -> None:
+    if not env_flag(env.get("IMAGEAI_PLAYGROUND_DELETE_AFTER_SAVE", "true")):
+        return
+    try:
+        page.evaluate(
+            """
+async () => {
+  const deleteDb = (name) => new Promise((resolve) => {
+    const request = indexedDB.deleteDatabase(name);
+    request.onsuccess = () => resolve(true);
+    request.onerror = () => resolve(false);
+    request.onblocked = () => resolve(false);
+  });
+  const names = ["gpt-image-playground"];
+  if (indexedDB.databases) {
+    try {
+      const databases = await indexedDB.databases();
+      for (const db of databases || []) {
+        if (db && db.name && db.name.includes("gpt-image-playground")) names.push(db.name);
+      }
+    } catch (_) {}
+  }
+  for (const name of Array.from(new Set(names))) {
+    await deleteDb(name);
+  }
+}
+"""
+        )
+        if log:
+            log("[images] 已清理 GPT Image Playground 本地任务/图片历史，保留网站设置")
+    except Exception as exc:
+        if log:
+            log(f"[images] GPT Image Playground 历史清理未完成：{exc}；图片已保存，不影响后续流程")
+
+
+def generate_imageai_playground_image(
+    prompt: str,
+    output_path: Path,
+    size: str,
+    purpose: str,
+    env: dict[str, str],
+    log: Callable[[str], None] | None = None,
+) -> Path:
+    try:
+        from playwright.sync_api import sync_playwright
+    except Exception as exc:
+        raise RuntimeError("GPT Image Playground 网页自动化需要 playwright，请先运行 pip install playwright。") from exc
+
+    clean_prompt = build_imageai_playground_prompt(prompt, size, purpose)
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    storage.write_text(output_path.with_suffix(".md"), normalize_image_prompt(prompt) + "\n")
+
+    browser_path = resolve_chatgpt_browser_path(env)
+    profile_dir = storage.ensure_dir(imageai_playground_user_data_dir(env))
+    launch_url = imageai_playground_launch_url(env)
+    timeout_seconds = imageai_playground_wait_seconds(env)
+    if log:
+        log(f"[images] GPT Image Playground 打开浏览器 profile={profile_dir}")
+        if env_flag(env.get("IMAGEAI_PLAYGROUND_USE_SAVED_SETTINGS", "true")):
+            log("[images] 使用 imageai.centos.hk 网站已保存的密钥和模型配置；本次只输入提示词并抓回图片")
+        else:
+            log("[images] 已自动注入第三方 Base URL/API Key 到 imageai.centos.hk，生成完成后会抓回项目目录")
+
+    with sync_playwright() as playwright:
+        launch_kwargs: dict[str, Any] = {
+            "headless": env_flag(env.get("IMAGEAI_PLAYGROUND_HEADLESS")),
+            "accept_downloads": True,
+            "viewport": {"width": 1440, "height": 1100},
+            "locale": "zh-CN",
+            "args": ["--disable-blink-features=AutomationControlled"],
+        }
+        if browser_path:
+            launch_kwargs["executable_path"] = browser_path
+        context = playwright.chromium.launch_persistent_context(str(profile_dir), **launch_kwargs)
+        try:
+            page = context.pages[0] if context.pages else context.new_page()
+            page.goto(launch_url, wait_until="domcontentloaded", timeout=60000)
+            page.wait_for_timeout(2500)
+            before_images = page.evaluate(_large_chatgpt_images_script())
+            before_indexes = {
+                int(item.get("index", -1))
+                for item in before_images
+                if isinstance(item, dict) and int(item.get("index", -1)) >= 0
+            } if isinstance(before_images, list) else set()
+            _fill_imageai_playground_prompt(page, clean_prompt, timeout_seconds=min(timeout_seconds, 240.0))
+            _click_imageai_playground_generate(page)
+            if log:
+                log("[images] GPT Image Playground 提示词已提交，正在等待图片")
+            result = _save_latest_imageai_playground_image(page, before_indexes, output_path, timeout_seconds, log=log)
+            if log:
+                log(f"[images] GPT Image Playground 已保存 {output_path.name}")
+            cleanup_imageai_playground_history(page, env, log=log)
+            return result
+        finally:
+            with contextlib.suppress(Exception):
+                context.close()
+            if log:
+                log("[images] 已关闭本次 GPT Image Playground 窗口")
+
+
 def prepare_chatgpt_handoff_request(
     prompt: str,
     output_path: Path,
@@ -4554,17 +4853,28 @@ def third_party_image_available(env: dict[str, str]) -> bool:
     return bool(api_key and base_url)
 
 
+def imageai_playground_available(env: dict[str, str]) -> bool:
+    if env_flag(env.get("IMAGEAI_PLAYGROUND_USE_SAVED_SETTINGS", "true")):
+        return bool(clean_text(env.get("IMAGEAI_PLAYGROUND_URL") or "https://imageai.centos.hk/"))
+    return third_party_image_available(env)
+
+
 def resolve_image_provider(env: dict[str, str]) -> dict[str, str]:
     preference = clean_text(env.get("IMAGE_PROVIDER") or "auto").lower() or "auto"
     prefer_apiyi = env_flag(env.get("APIYI_IMAGE_REPLACE_ARK"))
     has_apiyi = apiyi_image_available(env)
     has_third_party = third_party_image_available(env)
+    has_imageai_playground = imageai_playground_available(env)
     has_ark = bool((env.get("ARK_API_KEY", "") or "").strip())
 
     if preference in {"chatgpt_web_auto", "chatgpt-auto", "chatgpt_auto", "chatgpt_browser"}:
         return {"key": "chatgpt_web_auto", "label": "ChatGPT 网页自动化", "model": "chatgpt-account"}
     if preference in {"chatgpt", "chatgpt_handoff", "chatgpt-web", "chatgpt_web"}:
         return {"key": "chatgpt_handoff", "label": "ChatGPT 网页/桌面接力", "model": "chatgpt-account"}
+    if preference in {"imageai_playground", "imageai", "gpt_image_playground", "gpt-image-playground", "playground_web"}:
+        if not has_imageai_playground:
+            raise RuntimeError("已选择 GPT Image Playground 网页出图，但入口地址为空；若关闭了网站已保存配置，还需要填写第三方 API Key/Base URL。")
+        return {"key": "imageai_playground", "label": "GPT Image Playground 网页", "model": resolve_third_party_image_model(env)}
     if preference in {"newapi", "new_api", "new-api"}:
         if not has_third_party:
             raise RuntimeError("已选择 NewAPI 出图，但 THIRD_PARTY_IMAGE_API_KEY 或 THIRD_PARTY_IMAGE_BASE_URL 还没填完整。")
@@ -4612,6 +4922,7 @@ def resolve_image_provider_queue(env: dict[str, str]) -> list[dict[str, str]]:
     has_ark = bool((env.get("ARK_API_KEY", "") or "").strip())
     has_apiyi = apiyi_image_available(env)
     has_third_party = third_party_image_available(env)
+    has_imageai_playground = imageai_playground_available(env)
     allow_chatgpt_auto = not env.get("CHATGPT_IMAGE_AUTO_OPEN") or env_flag(env.get("CHATGPT_IMAGE_AUTO_OPEN"))
 
     def record(key: str) -> dict[str, str]:
@@ -4623,6 +4934,8 @@ def resolve_image_provider_queue(env: dict[str, str]) -> list[dict[str, str]]:
             return {"key": "third_party", "label": "第三方 OpenAI 兼容文生图", "model": resolve_third_party_image_model(env)}
         if key == "newapi":
             return {"key": "third_party", "label": "NewAPI / OpenAI Image", "model": resolve_third_party_image_model(env)}
+        if key == "imageai_playground":
+            return {"key": "imageai_playground", "label": "GPT Image Playground 网页", "model": resolve_third_party_image_model(env)}
         if key == "chatgpt_web_auto":
             return {"key": "chatgpt_web_auto", "label": "ChatGPT 网页自动化", "model": "chatgpt-account"}
         if key == "chatgpt_handoff":
@@ -4648,6 +4961,10 @@ def resolve_image_provider_queue(env: dict[str, str]) -> list[dict[str, str]]:
         return [record("chatgpt_web_auto")]
     if preference in {"chatgpt", "chatgpt_handoff", "chatgpt-web", "chatgpt_web"}:
         return [record("chatgpt_handoff")]
+    if preference in {"imageai_playground", "imageai", "gpt_image_playground", "gpt-image-playground", "playground_web"}:
+        if not has_imageai_playground:
+            raise RuntimeError("已选择 GPT Image Playground 网页出图，但入口地址为空；若关闭了网站已保存配置，还需要填写第三方 API Key/Base URL。")
+        return [record("imageai_playground")]
     if preference in {"newapi", "new_api", "new-api"}:
         if not has_third_party:
             raise RuntimeError("已选择 NewAPI 出图，但第三方配置不完整。")
@@ -4725,6 +5042,10 @@ def generate_openai_compatible_image(
         raise RuntimeError(f"{label} Base URL 未配置，无法调用 OpenAI 兼容文生图。")
 
     model = str(config["model"])
+    if is_openai_compatible_connection_stub(model):
+        raise RuntimeError(
+            f"{label} 图片模型 ID 不能填写 {model}；它是 NewAPI 连接对象类型，不是图片模型。请改成 gpt-image-1、dall-e-3、gpt-image-2-all 或你的 NewAPI 图片模型别名。"
+        )
     request_size = normalize_openai_compatible_image_size(size, model)
     clean_prompt = apply_apiyi_prompt_conventions(prompt, size)
     payload: dict[str, Any] = {
@@ -4840,6 +5161,8 @@ def generate_configured_image(
                     )
                 if provider["key"] == "chatgpt_web_auto":
                     last_path = generate_chatgpt_web_auto_image(prepared_prompt, output_path, size, purpose, env, log=log)
+                elif provider["key"] == "imageai_playground":
+                    last_path = generate_imageai_playground_image(prepared_prompt, output_path, size, purpose, env, log=log)
                 elif provider["key"] == "chatgpt_handoff":
                     last_path = generate_chatgpt_handoff_image(prepared_prompt, output_path, size, purpose, env, log=log)
                 elif provider["key"] in {"apiyi", "third_party"}:
@@ -11367,6 +11690,8 @@ class JobRuntime:
                 add("[images] ChatGPT 接力模式：会逐张打开提示词并等待目标图片文件保存完成")
             if provider["key"] == "chatgpt_web_auto":
                 add("[images] ChatGPT 网页自动化：会自动发送提示词、等待图片并保存到项目目录；首次使用需要在弹出浏览器中登录")
+            if provider["key"] == "imageai_playground":
+                add("[images] GPT Image Playground 网页模式：会打开 imageai.centos.hk，自动注入第三方 API 配置、提交提示词并保存图片")
             if not missing_only:
                 add("[images] 完整重生模式：新图会先生成到临时文件，成功后再替换旧图")
             else:
@@ -11444,6 +11769,8 @@ class JobRuntime:
                 add("[covers] ChatGPT 接力模式：会逐张打开提示词并等待目标封面文件保存完成")
             if provider["key"] == "chatgpt_web_auto":
                 add("[covers] ChatGPT 网页自动化：会自动发送提示词、等待图片并保存到项目目录；首次使用需要在弹出浏览器中登录")
+            if provider["key"] == "imageai_playground":
+                add("[covers] GPT Image Playground 网页模式：会打开 imageai.centos.hk，自动提交封面提示词并保存图片")
             for label, prompt, output_path, output_size in cover_jobs:
                 add(f"[covers] 开始生成 {label}")
                 await asyncio.to_thread(generate_configured_image_safely, prompt, output_path, output_size, "cover", env, add, template)

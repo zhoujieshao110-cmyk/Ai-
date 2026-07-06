@@ -99,7 +99,11 @@ def _parse_json(text: str) -> dict[str, Any]:
 
 def _contains_domain_route_error(text: str) -> bool:
     haystack = (text or "").lower()
-    return "域名解析错误" in (text or "") or "domain" in haystack and "error" in haystack
+    return (
+        "域名解析错误" in (text or "")
+        or "鍩熷悕瑙ｆ瀽閿欒" in (text or "")
+        or ("domain" in haystack and "error" in haystack)
+    )
 
 
 def _merged_env(values: dict[str, str]) -> dict[str, str]:
@@ -256,6 +260,13 @@ def _validate_openai_compatible_image(
     base_url = services.normalize_openai_compatible_base_url(base_url_value or "")
     if not api_key or not base_url:
         return _result(result_key, "unconfigured", f"请先填写 {title} API 密钥和 Base URL。")
+    if services.is_openai_compatible_connection_stub(model):
+        return _result(
+            result_key,
+            "error",
+            f"{title} 的图片模型 ID 不能填写 {model}；这是 NewAPI 连接对象类型，不是可出图模型。请改成 gpt-image-1、dall-e-3、gpt-image-2-all 或你在 NewAPI 后台配置的图片模型别名。",
+            {"base_url": base_url, "model": model},
+        )
 
     response = _request_json(
         "GET",
@@ -282,8 +293,13 @@ def _validate_openai_compatible_image(
         return _result(
             result_key,
             "error",
-            "当前 Base URL 返回了“域名解析错误”，说明这条网关地址本身没有正确转发到 OpenAI 兼容接口。",
-            {"base_url": base_url},
+            f"{title} 地址可以连通，但带密钥访问时 NewAPI 返回了“域名解析错误”。这通常是 NewAPI 后台渠道、分组或模型路由到了不可解析的上游域名；也可能是模型 ID 填成了 newapi_channel_conn 这类连接对象类型。请确认 token 分组有可用图片模型，并填写真实模型 ID。",
+            {
+                "base_url": base_url,
+                "model": model,
+                "status": response.get("status"),
+                "body": response.get("text", "")[:300],
+            },
         )
     if response["status"] in {401, 403}:
         return _result(result_key, "error", f"{title} API 密钥无效，接口返回了鉴权失败。")
