@@ -92,3 +92,7 @@ git status --ignored --short
 ## 注意
 
 本项目会调用第三方模型、TTS、ASR、图片生成和发布平台。公开仓库时只发布代码和模板，不发布账号、密钥、cookie、授权文件、私有素材和生成成片。
+
+特别鸣谢
+谢谢！
+<a href="https://linux.do/" >L站</a>
