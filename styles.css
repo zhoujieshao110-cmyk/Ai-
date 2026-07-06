@@ -820,10 +820,24 @@ select:focus {
   display: block;
 }
 
-.media-card--cover img {
-  max-height: 320px;
-  object-fit: contain;
+.media-card--scene > img {
+  aspect-ratio: 16 / 9;
+  object-fit: cover;
   background: #f8fafc;
+}
+
+.media-card--cover img {
+  aspect-ratio: 16 / 9;
+  object-fit: cover;
+  background: #f8fafc;
+}
+
+.media-card--cover-story img {
+  aspect-ratio: 4 / 3;
+}
+
+.media-card--cover-portrait img {
+  aspect-ratio: 3 / 4;
 }
 
 .media-card__preview {
@@ -835,6 +849,24 @@ select:focus {
   text-align: center;
   background: linear-gradient(135deg, #101827, #0658e8 55%, #facc15);
   color: #fff;
+}
+
+.media-card--scene .media-card__preview {
+  aspect-ratio: 16 / 9;
+  min-height: 0;
+}
+
+.media-card--cover .media-card__preview {
+  aspect-ratio: 16 / 9;
+  min-height: 0;
+}
+
+.media-card--cover-story .media-card__preview {
+  aspect-ratio: 4 / 3;
+}
+
+.media-card--cover-portrait .media-card__preview {
+  aspect-ratio: 3 / 4;
 }
 
 .media-card--placeholder {

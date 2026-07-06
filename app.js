@@ -472,7 +472,7 @@ function imagePromptPreviewHtml(prompt = "", fallback = "暂无提示词摘要")
 function sceneCardHtml(item) {
   const promptPreview = item.prompt_preview || item.prompt || "";
   return `
-    <article class="media-card media-card--workbench">
+    <article class="media-card media-card--workbench media-card--scene">
       <img src="${API_BASE}${versionedProjectUrl(item)}" alt="${escapeHtml(item.filename)}" />
       <div class="media-card__body">
         <div class="media-card__title-row">
@@ -495,7 +495,7 @@ function sceneCardHtml(item) {
 function missingSceneCardHtml(item) {
   const filename = item.filename || `${item.stem || "s_01"}.png`;
   return `
-    <article class="media-card media-card--placeholder media-card--workbench">
+    <article class="media-card media-card--placeholder media-card--workbench media-card--scene">
       <div class="media-card__preview">
         <div>
           <strong>${escapeHtml(filename)}</strong>
@@ -521,7 +521,7 @@ function coverGalleryCardsHtml(files) {
     .map((cover) => {
       if (!cover.image) {
         return `
-          <article class="media-card media-card--cover media-card--placeholder">
+          <article class="media-card media-card--cover media-card--cover-${escapeHtml(cover.key)} media-card--placeholder">
             <div class="media-card__preview">
               <div>
                 <strong>${escapeHtml(cover.label)}</strong>
@@ -540,7 +540,7 @@ function coverGalleryCardsHtml(files) {
         `;
       }
       return `
-        <article class="media-card media-card--cover">
+        <article class="media-card media-card--cover media-card--cover-${escapeHtml(cover.key)}">
           <img src="${API_BASE}${versionedProjectUrl(cover.image)}" alt="${escapeHtml(cover.label)}" />
           <div class="media-card__body">
             <div class="media-card__title-row">

@@ -1876,6 +1876,104 @@ def normalize_openai_compatible_image_size(size: str, model: str = "") -> str:
     return "1024x1024"
 
 
+def parse_image_size_hint(size: str) -> tuple[int, int] | None:
+    match = re.fullmatch(r"(\d+)x(\d+)", (size or "").strip())
+    if not match:
+        return None
+    width, height = int(match.group(1)), int(match.group(2))
+    if width <= 0 or height <= 0:
+        return None
+    return width, height
+
+
+def _pil_lanczos() -> Any:
+    if Image is None:
+        return 1
+    resampling = getattr(Image, "Resampling", Image)
+    return getattr(resampling, "LANCZOS", getattr(Image, "LANCZOS", 1))
+
+
+def _image_to_rgb_canvas(image: Any) -> Any:
+    if image.mode in {"RGBA", "LA", "P"} or image.info.get("transparency") is not None:
+        rgba = image.convert("RGBA")
+        canvas = Image.new("RGBA", rgba.size, (255, 255, 255, 255))
+        canvas.alpha_composite(rgba)
+        return canvas.convert("RGB")
+    return image.convert("RGB")
+
+
+def _cover_resize_image(image: Any, target_size: tuple[int, int]) -> Any:
+    target_width, target_height = target_size
+    source_width, source_height = image.size
+    target_ratio = target_width / max(1, target_height)
+    source_ratio = source_width / max(1, source_height)
+    if source_ratio > target_ratio:
+        crop_width = max(1, int(round(source_height * target_ratio)))
+        left = max(0, (source_width - crop_width) // 2)
+        image = image.crop((left, 0, left + crop_width, source_height))
+    else:
+        crop_height = max(1, int(round(source_width / target_ratio)))
+        top = max(0, (source_height - crop_height) // 2)
+        image = image.crop((0, top, source_width, top + crop_height))
+    return image.resize(target_size, _pil_lanczos())
+
+
+def normalize_generated_image_size(
+    path: Path,
+    size: str,
+    log: Callable[[str], None] | None = None,
+    label: str = "",
+) -> bool:
+    target_size = parse_image_size_hint(size)
+    if Image is None or target_size is None or not path.exists():
+        return False
+    try:
+        with Image.open(path) as source:
+            rgb = _image_to_rgb_canvas(source)
+            original_size = rgb.size
+            if original_size == target_size:
+                return False
+            target_width, target_height = target_size
+            original_width, original_height = original_size
+            target_ratio = target_width / max(1, target_height)
+            source_ratio = original_width / max(1, original_height)
+            ratio_delta = abs(source_ratio - target_ratio) / max(0.0001, target_ratio)
+            if ratio_delta <= 0.08:
+                normalized = _cover_resize_image(rgb, target_size)
+            else:
+                normalized = _cover_resize_image(rgb, target_size)
+                if ImageFilter is not None:
+                    radius = max(12, int(max(target_size) / 80))
+                    normalized = normalized.filter(ImageFilter.GaussianBlur(radius=radius))
+                scale = min(target_width / max(1, original_width), target_height / max(1, original_height))
+                foreground_size = (
+                    max(1, int(round(original_width * scale))),
+                    max(1, int(round(original_height * scale))),
+                )
+                foreground = rgb.resize(foreground_size, _pil_lanczos())
+                normalized.paste(
+                    foreground,
+                    (
+                        (target_width - foreground_size[0]) // 2,
+                        (target_height - foreground_size[1]) // 2,
+                    ),
+                )
+            save_format = "JPEG" if path.suffix.lower() in {".jpg", ".jpeg"} else "PNG"
+            save_kwargs: dict[str, Any] = {"format": save_format}
+            if save_format == "JPEG":
+                save_kwargs["quality"] = 95
+            normalized.save(path, **save_kwargs)
+        if log:
+            name = label or path.name
+            log(f"[images] normalized {name} size {original_width}x{original_height} -> {target_width}x{target_height}")
+        return True
+    except Exception as exc:
+        if log:
+            name = label or path.name
+            log(f"[images] normalize {name} size failed: {exc}")
+        return False
+
+
 def apiyi_image_timeout(env: dict[str, str]) -> float:
     value = clean_text(env.get("APIYI_IMAGE_TIMEOUT_SECONDS") or env.get("IMAGE_GENERATION_TIMEOUT_SECONDS") or "")
     if not value:
@@ -3490,6 +3588,13 @@ def audit_generated_image(path: Path, size: str, purpose: str) -> dict[str, Any]
     report["width"] = int(width)
     report["height"] = int(height)
     report["stddev"] = round(stddev, 2)
+    target_size = parse_image_size_hint(size)
+    if target_size is not None:
+        target_width, target_height = target_size
+        report["target_width"] = int(target_width)
+        report["target_height"] = int(target_height)
+        if (width, height) != target_size:
+            report["reasons"].append("dimension_mismatch")
 
     if stddev < IMAGE_AUDIT_MIN_STDDEV:
         report["reasons"].append("flat_low_variance")
@@ -3560,6 +3665,7 @@ def audit_generated_image(path: Path, size: str, purpose: str) -> dict[str, Any]
         "coverage_too_narrow",
         "coverage_too_short",
         "empty_foreground",
+        "dimension_mismatch",
     }
     severity = "ok"
     if report["reasons"]:
@@ -5179,6 +5285,7 @@ def generate_configured_image(
                 else:
                     last_path = generate_ark_image(prepared_prompt, output_path, size, purpose, env)
 
+                normalize_generated_image_size(last_path, size, log=log, label=display_name)
                 audit_report = audit_generated_image(last_path, size, purpose)
                 audit_report["attempt"] = attempt
                 audit_report["provider"] = provider["key"]

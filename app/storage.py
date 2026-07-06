@@ -1725,9 +1725,9 @@ def scene_status(project_id: int) -> dict[str, Any]:
             if not prompt_text and prompt_path.exists():
                 prompt_text = read_text(prompt_path).strip()
             source_prompt = str(record.get("source_prompt") or "").strip()
-            audit = record.get("audit") if isinstance(record.get("audit"), dict) else {}
-            if not audit and audit_path.exists():
-                audit = read_json(audit_path, {})
+            audit = read_json(audit_path, {}) if audit_path.exists() else {}
+            if not audit:
+                audit = record.get("audit") if isinstance(record.get("audit"), dict) else {}
             compact_prompt = re.sub(r"\s+", " ", prompt_text).strip()
             candidate = {
                 "filename": path.name,
