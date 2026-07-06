@@ -1843,11 +1843,20 @@ def normalize_openai_compatible_base_url(value: str) -> str:
     return text
 
 
-def normalize_openai_compatible_image_size(size: str) -> str:
+def normalize_openai_compatible_image_size(size: str, model: str = "") -> str:
     match = re.fullmatch(r"(\d+)x(\d+)", (size or "").strip())
     if not match:
         return "1024x1024"
     width, height = (int(match.group(1)), int(match.group(2)))
+    model_key = clean_text(model).lower()
+    if "dall-e-3" in model_key or "dalle-3" in model_key:
+        if width > height:
+            return "1792x1024"
+        if width < height:
+            return "1024x1792"
+        return "1024x1024"
+    if "dall-e-2" in model_key or "dalle-2" in model_key:
+        return "1024x1024"
     if width > height:
         return "1536x1024"
     if width < height:
@@ -4556,6 +4565,10 @@ def resolve_image_provider(env: dict[str, str]) -> dict[str, str]:
         return {"key": "chatgpt_web_auto", "label": "ChatGPT 网页自动化", "model": "chatgpt-account"}
     if preference in {"chatgpt", "chatgpt_handoff", "chatgpt-web", "chatgpt_web"}:
         return {"key": "chatgpt_handoff", "label": "ChatGPT 网页/桌面接力", "model": "chatgpt-account"}
+    if preference in {"newapi", "new_api", "new-api"}:
+        if not has_third_party:
+            raise RuntimeError("已选择 NewAPI 出图，但 THIRD_PARTY_IMAGE_API_KEY 或 THIRD_PARTY_IMAGE_BASE_URL 还没填完整。")
+        return {"key": "third_party", "label": "NewAPI / OpenAI Image", "model": resolve_third_party_image_model(env)}
     if preference in {"third_party", "third-party", "custom_openai", "custom-openai", "openai_custom", "openai-custom"}:
         if not has_third_party:
             raise RuntimeError("已选择第三方 OpenAI 兼容出图，但 THIRD_PARTY_IMAGE_API_KEY 或 THIRD_PARTY_IMAGE_BASE_URL 还没填完整。")
@@ -4608,6 +4621,8 @@ def resolve_image_provider_queue(env: dict[str, str]) -> list[dict[str, str]]:
             return {"key": "apiyi", "label": "API易 / OpenAI 兼容文生图", "model": resolve_apiyi_image_model(env)}
         if key == "third_party":
             return {"key": "third_party", "label": "第三方 OpenAI 兼容文生图", "model": resolve_third_party_image_model(env)}
+        if key == "newapi":
+            return {"key": "third_party", "label": "NewAPI / OpenAI Image", "model": resolve_third_party_image_model(env)}
         if key == "chatgpt_web_auto":
             return {"key": "chatgpt_web_auto", "label": "ChatGPT 网页自动化", "model": "chatgpt-account"}
         if key == "chatgpt_handoff":
@@ -4633,6 +4648,10 @@ def resolve_image_provider_queue(env: dict[str, str]) -> list[dict[str, str]]:
         return [record("chatgpt_web_auto")]
     if preference in {"chatgpt", "chatgpt_handoff", "chatgpt-web", "chatgpt_web"}:
         return [record("chatgpt_handoff")]
+    if preference in {"newapi", "new_api", "new-api"}:
+        if not has_third_party:
+            raise RuntimeError("已选择 NewAPI 出图，但第三方配置不完整。")
+        return [record("newapi")]
     if preference in {"third_party", "third-party", "custom_openai", "custom-openai", "openai_custom", "openai-custom"}:
         if not has_third_party:
             raise RuntimeError("已选择第三方 OpenAI 兼容出图，但第三方配置不完整。")
@@ -4693,22 +4712,26 @@ def generate_openai_compatible_image(
     env: dict[str, str],
     log: Callable[[str], None] | None = None,
     provider_key: str = "apiyi",
+    provider_label: str | None = None,
 ) -> Path:
     del purpose
     config = openai_compatible_image_config(env, provider_key)
     api_key = str(config["api_key"])
     base_url = str(config["base_url"])
-    label = str(config["label"])
+    label = provider_label or str(config["label"])
     if not api_key:
         raise RuntimeError(f"{label} API Key 未配置，无法调用 OpenAI 兼容文生图。")
     if not base_url:
         raise RuntimeError(f"{label} Base URL 未配置，无法调用 OpenAI 兼容文生图。")
 
     model = str(config["model"])
+    request_size = normalize_openai_compatible_image_size(size, model)
     clean_prompt = apply_apiyi_prompt_conventions(prompt, size)
     payload: dict[str, Any] = {
         "model": model,
         "prompt": clean_prompt,
+        "n": 1,
+        "size": request_size,
         "response_format": "b64_json",
     }
     headers = {"Authorization": f"Bearer {api_key}", "Accept": "application/json"}
@@ -4724,7 +4747,7 @@ def generate_openai_compatible_image(
             if log:
                 log(
                     f"[images] {label} POST /v1/images/generations model={model} "
-                    f"response_format=b64_json attempt={attempt}/{max_retries} timeout={request_timeout:.0f}s"
+                    f"size={request_size} response_format=b64_json attempt={attempt}/{max_retries} timeout={request_timeout:.0f}s"
                 )
             try:
                 response = _request_provider_json(
@@ -4828,6 +4851,7 @@ def generate_configured_image(
                         env,
                         log=log,
                         provider_key=provider["key"],
+                        provider_label=provider["label"],
                     )
                 else:
                     last_path = generate_ark_image(prepared_prompt, output_path, size, purpose, env)

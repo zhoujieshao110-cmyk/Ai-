@@ -392,6 +392,7 @@ CONFIG_SECTIONS = [
                     {"value": "auto_no_apiyi", "label": "自动选择（不使用第三方接口）"},
                     {"value": "auto", "label": "自动选择（原逻辑）"},
                     {"value": "ark", "label": "火山方舟 Seedream"},
+                    {"value": "newapi", "label": "NewAPI / OpenAI Image"},
                     {"value": "third_party", "label": "第三方 OpenAI 兼容"},
                     {"value": "apiyi", "label": "API易 / OpenAI 兼容"},
                     {"value": "chatgpt_web_auto", "label": "ChatGPT 网页自动化"},
@@ -536,7 +537,7 @@ CONFIG_SECTIONS = [
     {
         "key": "third_party_image",
         "title": "第三方 OpenAI 兼容文生图",
-        "description": "参考 CookSleep/gpt_image_playground 的 OpenAI 兼容接入方式，填写任意中转站或第三方图片 API。",
+        "description": "参考 CookSleep/gpt_image_playground 的 OpenAI 兼容接入方式，支持 NewAPI / One API / 各类中转站图片 API。",
         "validator": "third_party_image",
         "fields": [
             {
@@ -553,7 +554,7 @@ CONFIG_SECTIONS = [
                 "required": True,
                 "secret": False,
                 "kind": "text",
-                "help": "例如 https://api.example.com 或 https://api.example.com/v1；也可填完整 /v1/images/generations，程序会自动归一化。",
+                "help": "NewAPI 填你的服务器地址即可，例如 https://你的newapi服务器地址；也可填 /v1 或完整 /v1/images/generations，程序会自动归一化。",
             },
             {
                 "key": "THIRD_PARTY_IMAGE_MODEL",
@@ -561,7 +562,7 @@ CONFIG_SECTIONS = [
                 "required": False,
                 "secret": False,
                 "kind": "text",
-                "help": "例如 gpt-image-2-all、gpt-image-1、其它中转站提供的模型名。",
+                "help": "按 NewAPI 渠道支持填写，例如 gpt-image-1、dall-e-3、gpt-image-2-all 或其它中转站模型名。",
             },
             {
                 "key": "THIRD_PARTY_IMAGE_TIMEOUT_SECONDS",
