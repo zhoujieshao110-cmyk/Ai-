@@ -95,4 +95,4 @@ git status --ignored --short
 
 特别鸣谢
 谢谢！
-<a href="https://linux.do/" >L站</a>
+<a href="https://linux.do/" >LINUX DO</a>
