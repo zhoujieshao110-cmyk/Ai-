@@ -4,7 +4,12 @@
   "mode": "article",
   "default_disclaimer": "",
   "release_tags": "图文",
-  "cover_style": "forbes",
+  "target_audience": "喜欢短图文、观点清楚、愿意收藏转发的中文读者",
+  "channel_voice": "清楚、克制、像编辑写给普通读者，不堆术语",
+  "visual_strategy": "现代杂志/纪录片头图质感，真实摄影或编辑型视觉，主体突出，高对比光影，画面干净；头图 5-8 字大标题，正文配图默认无可读长文字",
+  "forbidden_rules": "不要固定成旧纸、档案、手账、胶带风；不要输出 HKR、评分、说服策略等分析字段；资料不足时停止生成",
+  "interaction_goal": "结尾引导读者补充经历、观点或收藏转发",
+  "cover_style": "editorial",
   "cover_footnote_line_1": "",
   "cover_footnote_line_2": "",
   "builtin_locked": true

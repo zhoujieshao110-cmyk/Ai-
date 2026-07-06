@@ -373,7 +373,7 @@ def replace_section(content: str, title: str, body: str, level: int = 2) -> str:
     pattern = re.compile(
         rf"(?ms)^{re.escape(hashes)}[ \t]+{re.escape(title)}[^\r\n]*\r?\n.*?(?=^(?:{heading_breaks})[ \t]+|\Z)"
     )
-    replacement = f"{hashes} {title}\n\n{body.strip()}\n"
+    replacement = f"{hashes} {title}\n\n{body.strip()}\n\n"
     if pattern.search(source):
         return pattern.sub(replacement, source, count=1)
     reference_match = re.search(r"(?m)^##[ \t]+参考资料[^\r\n]*\r?\n", source)
@@ -382,6 +382,89 @@ def replace_section(content: str, title: str, body: str, level: int = 2) -> str:
         tail = source[reference_match.start() :].lstrip()
         return f"{head}\n\n{replacement.rstrip()}\n\n{tail}"
     return f"{source.rstrip()}\n\n{replacement}".strip() + "\n"
+
+
+COMPACT_META_LABELS = (
+    "封面副标题",
+    "核心观点",
+    "时长",
+    "推荐发布标题",
+    "钩子",
+    "互动钩子",
+    "免责声明",
+)
+
+VERBOSE_META_LABELS = {
+    "HKR判断",
+    "评分等级",
+    "低分处理",
+    "叙事原型",
+    "人格",
+    "说服策略",
+    "callback设计",
+    "黄金前三句",
+    "情绪曲线",
+    "节奏策略",
+    "钩子策略",
+    "前3秒视觉钩子",
+    "合规自检",
+    "输入类型",
+    "题材类型",
+    "选题评分",
+    "备选标题",
+    "备选钩子",
+    "备选导语",
+}
+
+
+def compact_content_meta(content: str) -> str:
+    source = content or ""
+    meta = extract_section(source, "Meta", level=2)
+    if not meta:
+        return source
+
+    values: dict[str, str] = {}
+    for raw in meta.splitlines():
+        line = raw.strip()
+        match = re.match(r"^[-*]\s*(?:\*\*)?\s*([^：:]+?)\s*(?:\*\*)?\s*[：:]\s*(.*?)\s*$", line)
+        if not match:
+            continue
+        label = clean_text(match.group(1))
+        value = clean_bullet_value(match.group(2))
+        if label in COMPACT_META_LABELS and label not in values:
+            values[label] = value
+
+    if "核心观点" not in values:
+        core = extract_bullet_field(source, "核心观点") or extract_bullet_field(source, "核心知识点")
+        if core:
+            values["核心观点"] = summarize_scene_text(core, 72)
+    if "钩子" not in values:
+        hook = extract_bullet_field(source, "钩子") or first_nonempty_dialogue_line(source)
+        if hook:
+            values["钩子"] = summarize_scene_text(strip_dialogue_speaker(hook), 72)
+    if "互动钩子" not in values:
+        dialogue = parse_dialogue_lines(source, "video")
+        tail = strip_dialogue_speaker(dialogue[-1]) if dialogue else ""
+        if tail and ("？" in tail or "?" in tail or "评论" in tail):
+            values["互动钩子"] = summarize_scene_text(tail, 72)
+
+    lines = []
+    for label in COMPACT_META_LABELS:
+        if label not in values:
+            continue
+        value = values.get(label, "")
+        lines.append(f"- {label}: {value}".rstrip())
+    if not lines:
+        return source
+    return replace_section(source, "Meta", "\n".join(lines), level=2)
+
+
+def first_nonempty_dialogue_line(content: str) -> str:
+    for line in parse_dialogue_lines(content, "video"):
+        cleaned = clean_text(line)
+        if cleaned:
+            return cleaned
+    return ""
 
 
 def extract_numbered_items(block: str) -> list[str]:
@@ -420,6 +503,15 @@ def extract_numbered_blocks(block: str) -> list[str]:
 def fallback_cover_title(topic: str) -> str:
     title = clean_text(topic)
     return title[:12] if len(title) > 12 else title
+
+
+def compact_cover_title_for_prompt(title: str, topic: str = "") -> str:
+    cleaned = clean_text(title) or fallback_cover_title(topic)
+    cleaned = re.sub(r"[？?！!。；;：:].*$", "", cleaned).strip()
+    cleaned = re.sub(r"[“”\"'《》]", "", cleaned).strip()
+    if len(cleaned) <= 8:
+        return cleaned
+    return cleaned[:8]
 
 
 def fallback_publish_title(topic: str) -> str:
@@ -5603,7 +5695,7 @@ def build_common_content_system_rules() -> str:
     return """
 你现在要为短片工坊生成最终可落地的 content.md。
 优先级：
-1. 当前频道模板 prompt.md 是最高优先级。频道的人设、语气、角色关系、栏目结构、时长、封面气质、镜头语言、禁忌和发布习惯，都必须服从频道模板。
+1. 当前频道模板 prompt.md 是最高优先级。频道的人设、语气、角色关系、栏目结构、时长、封面气质、镜头语言、禁忌和发布习惯，都必须服从频道模板；但最终 Meta 字段和图片提示词长度按下方精简规则执行，旧模板里的分析字段不要输出。
 2. 当前主题和 brief 只提供本期素材，不得覆盖频道模板风格。不同频道必须生成不同口吻和不同视觉气质。
 3. 下方通用要求只用于保证短片工坊生产链路能解析，不允许把所有频道改写成同一种“通用爆款腔”。
 硬性要求：
@@ -5612,10 +5704,13 @@ def build_common_content_system_rules() -> str:
 3. 如果给了历史稿参考，只能借鉴风格、视角和连续创作语气，不能照抄旧稿。
 4. 如果给了联网资料，涉及最新事实、时间、金额、排名、参数时优先以联网资料为准；不确定就保守表达。
 5. 你的输出必须严格遵守当前模板 prompt 约定的章节、角色标签、图片提示词和时长要求。
-6. 如果频道模板没有明确章节，按原版兼容结构输出：# Meta、## 原始材料简述、视频频道输出 ## 对话脚本 或 ## 口播脚本、## 重点字幕、## 图片提示词、## 参考资料；图文频道输出 ## 正文、## 图片提示词、## 参考资料。
-7. 视频频道的图片提示词必须包含 ### 横屏封面图 (4:3)、### 竖屏封面图 (3:4)、### 场景图；场景图用 1. 2. 3. 编号，数量要匹配脚本时长和语音节奏。
-8. 封面提示词要和频道个人 IP 强关联，允许直接生成清晰可读的中文主标题、短副标题和频道名/作者角标；场景图只允许 1-3 个短标签或警示词，避免长段正文、脚注、免责声明、水印和乱码。
-9. 每张场景图必须根据对应脚本段落和本期素材重新设计，不要把风格写死成统一背景模板；除非频道模板明确要求。
+6. 如果主题依赖事实、新闻、专业知识或具体数据，但 brief 与参考资料不足以支撑结论，停止生成完整脚本，只输出：# 资料不足、## 需要补充的资料、## 建议检索方向；不得自行补充事实。
+7. 如果频道模板没有明确章节，按精简兼容结构输出：# 标题、## Meta、## 原始材料简述、视频频道输出 ## 对话脚本 或 ## 口播脚本、## 重点字幕、## 图片提示词、## 参考资料；图文频道输出 ## 正文、## 图片提示词、## 参考资料。
+8. Meta 只保留这些字段：封面副标题、核心观点、时长、推荐发布标题、钩子、互动钩子、免责声明。HKR、评分、叙事原型、说服策略、情绪曲线、节奏策略、callback、黄金前三句都只能内部思考，不要输出到 content.md。
+9. 视频频道的图片提示词必须包含 ### 横屏封面图 (4:3)、### 竖屏封面图 (3:4)、### 场景图；场景图用 1. 2. 3. 编号，数量要匹配脚本时长和语音节奏。
+10. 图片提示词按“频道视觉策略 -> 本期主题 -> 当前口播锚点”分工：频道只给统一质感，单张图只写主体、构图、动作、情绪和字幕安全区；不要把公共风格在每张图里重复 600 字。
+11. 封面标题控制在 5-8 个中文字左右，只配一句短副标题；场景图默认不生成可读文字，必要时只保留 1-3 个短标签，避免长段正文、脚注、免责声明、水印和乱码。
+12. 每张场景图必须根据对应脚本段落和本期素材重新设计，不要把风格写死成统一背景模板；除非频道模板明确要求。
 """.strip()
 
 
@@ -6412,8 +6507,8 @@ def build_content_scene_prompt_lines(project: dict[str, Any], template: dict[str
                 f"{topic}\n{beat}\n{dialogue_anchor}\n{content[:900]}",
             )
         subject_rules = dedupe_clauses(
-            [compact_prompt_rule(item, 78) for item in subject_hints if clean_text(item)]
-        )[:3]
+            [compact_prompt_rule(item, 58) for item in subject_hints if clean_text(item)]
+        )[:2]
         concrete_hint = concrete_visual_hint_from_anchor(
             focus or dialogue_anchor,
             f"{topic}\n{beat}\n{dialogue_anchor}\n{content[:600]}",
@@ -6427,14 +6522,14 @@ def build_content_scene_prompt_lines(project: dict[str, Any], template: dict[str
             concrete_hint,
             f"镜头变化：{scene_viewpoint_hint(idx, total, visual_type)}",
             f"叙事阶段：{narrative}，{stage_clause}" if stage_clause else f"叙事阶段：{narrative}",
-            f"频道气质：{compact_prompt_rule(content_scene_style_hint(style, template), 70)}",
+            f"频道气质：{compact_prompt_rule(content_scene_style_hint(style, template), 48)}",
             *subject_rules,
-            f"构图要求：{content_visual_layout_hint(visual_type)}",
-            "与前后镜头换主体动作、空间关系或视角，不复用同一构图和同一物件组合",
-            "主体明确，留出后期字幕安全区，场景图默认不生成可读文字；口播里的服务名、金额、按钮名、平台名和引号内容只作为语义锚点，不要原样写进画面",
-            "需要表现手机页面、账单、通知、评论或表格时，用无字界面、模糊短线、图标、色块和动作关系表达，不要长段正文、脚注或免责声明",
+            f"构图：{content_visual_layout_hint(visual_type)}",
+            "纪录片镜头感，真实摄影质感，主体突出，高对比光影，有前后景层次",
+            "与前后镜头换主体动作、空间关系或视角",
+            "留出后期字幕安全区；默认不生成可读文字，信息用无字界面、图标、色块和动作关系表达",
         ]
-        line = "，".join(dedupe_clauses([item for item in clauses if clean_text(item)])).strip("，,。") + "。"
+        line = compact_prompt_rule("，".join(dedupe_clauses([item for item in clauses if clean_text(item)])), 360).strip("，,。") + "。"
         lines.append(line)
     return lines
 
@@ -6444,6 +6539,7 @@ def build_content_cover_prompt(project: dict[str, Any], template: dict[str, Any]
     topic = clean_text(project.get("topic_name") or first_heading(content) or "本期主题")
     summary = summarize_content(content, mode)
     cover_title = clean_text(summary.get("cover_title") or first_heading(content) or topic)
+    cover_short_title = compact_cover_title_for_prompt(cover_title, topic)
     subtitle = clean_text(summary.get("cover_subtitle") or extract_bullet_field(content, "封面副标题"))
     brand = clean_text(template.get("brand_name") or template.get("name") or template.get("key") or project.get("template") or "")
     style_source = "\n".join(
@@ -6494,14 +6590,15 @@ def build_content_cover_prompt(project: dict[str, Any], template: dict[str, Any]
         "cover",
     )
     subject_rules = dedupe_clauses(
-        [compact_prompt_rule(item, 78) for item in subject_hints if clean_text(item)]
-    )[:3]
+        [compact_prompt_rule(item, 58) for item in subject_hints if clean_text(item)]
+    )[:2]
 
     clauses = [
         cover_variant_layout_hint(kind),
         f"封面先画：{focuses[0]}" if focuses else f"封面先画：{cover_title or topic}",
         concrete_hint,
-        f"频道气质：{compact_prompt_rule(content_cover_style_hint(style, template), 72)}",
+        f"频道气质：{compact_prompt_rule(content_cover_style_hint(style, template), 52)}",
+        "纪录片封面镜头感，真实摄影质感，主体突出，高对比光影",
     ]
     clauses.extend(subject_rules)
     if cover_anchor:
@@ -6510,17 +6607,17 @@ def build_content_cover_prompt(project: dict[str, Any], template: dict[str, Any]
         clauses.append(f"再用{focuses[1]}补出冲突、结果或空间关系")
     if len(focuses) > 2:
         clauses.append(f"可再带出{focuses[2]}作为辅助线索")
-    if cover_title:
-        clauses.append(f"主标题必须作为清晰可读中文大字出现：{cover_title}")
+    if cover_short_title:
+        clauses.append(f"主标题 5-8 字清晰大字：{cover_short_title}")
     if subtitle:
-        clauses.append(f"副标题可作为较小清晰中文出现：{subtitle}")
+        clauses.append(f"副标题一句短字：{summarize_scene_text(subtitle, 18)}")
     if brand:
         clauses.append(f"左上角或固定角标放频道名/作者名：{brand}")
     clauses.append("文字必须短、清楚、少量，避免长段正文、脚注、免责声明")
     clauses.append("除主标题、副标题和频道角标外，口播里的服务名、金额、按钮名、平台名和引号内容不要额外原样写进画面")
     clauses.append("保留后期叠标题和字幕的安全区域")
     clauses.append("保留一个固定角标或专属色块形成频道系列感")
-    return "，".join(dedupe_clauses([item for item in clauses if item]))
+    return compact_prompt_rule("，".join(dedupe_clauses([item for item in clauses if item])), 320)
 
 
 def build_dynamic_image_prompt_section(project: dict[str, Any], template: dict[str, Any], content: str) -> str:
@@ -7255,20 +7352,11 @@ def render_fallback_story_content(
         f"# {cover_title}\n\n"
         f"## Meta\n"
         f"- 封面副标题: {cover_subtitle}\n"
-        f"- 输入类型: 话题文字\n"
-        f"- 题材类型: 知识科普\n"
-        f"- 选题评分: 熟悉度 1.0 + 反常识 0.8 + 故事性 0.9 + 现实连接 0.8 + 可视化 0.9 = 4.4\n"
-        f"- HKR判断: H: 命中，存在反常识切口；K: 命中，可拆解出机制；R: 命中，能联系到日常认知\n"
-        f"- 评分等级: A级 4-4.4\n"
-        f"- 低分处理: 无需处理\n"
         f"- 核心观点: {topic}真正值得讲的，是背后那条因果线\n"
         f"- 时长: {duration}\n"
         f"- 推荐发布标题: {publish_title}\n"
-        f"- 备选标题: A. {topic}真正难讲的点，不在表面 / B. {topic}为什么总被讲偏 / C. {topic}背后的关键逻辑\n"
         f"- 钩子: 你以为「{topic}」只是个普通问题？真正有意思的是它背后的那套逻辑。\n"
-        f"- 备选钩子: A. 这件事难的从来不是答案 / B. 大家总在同一个地方看错 / C. 你以为常识，其实只讲了半截\n"
-        f"- 情绪曲线: 开头好奇 → 中段拆解 → 后段恍然 → 结尾落地\n"
-        f"- 节奏策略: 先抛反常识，再给背景、案例和回扣\n"
+        f"- 互动钩子: 你自己最容易在哪一步想当然？评论区留一句。\n"
         f"- 免责声明:\n\n"
         f"## 原始材料简述\n"
         f"- 主体: {topic}\n"
@@ -7313,19 +7401,11 @@ def render_fallback_article_content(project: dict[str, Any], template: dict[str,
         f"# {title}\n\n"
         f"## Meta\n"
         f"- 封面副标题: {subtitle}\n"
-        f"- 输入类型: 话题文字\n"
-        f"- 题材类型: 知识科普图文\n"
-        f"- 选题评分: 好奇强度 0.9 + 反差强度 0.8 + 可视化程度 0.9 + 评论欲 0.8 + 合规安全 1.0 = 4.4\n"
-        f"- HKR判断: H: 命中；K: 命中；R: 命中\n"
-        f"- 评分等级: A级 4-4.4\n"
-        f"- 低分处理: 无需处理\n"
         f"- 核心观点: {topic}真正值得看的，是那条容易被忽略的逻辑链\n"
         f"- 推荐发布标题: {publish_title}\n"
-        f"- 备选标题: A. {topic}，很多人从第一步就看错了 / B. {topic}，真正关键的不在表面 / C. {topic}背后的隐藏逻辑\n"
         f"- 钩子: 你有没有发现，很多人聊「{topic}」时，真正重要的那一步反而最少被提到？\n"
-        f"- 备选导语: A. 这件事最容易被忽略的，从来不是结论 / B. 大家看懂了表面，却没看懂真正的因果 / C. 真正值得讲的，往往是那条被跳过的链路\n"
-        f"- 情绪曲线: 开头好奇 → 中段拆解 → 后段恍然 → 结尾想评论\n"
-        f"- 节奏策略: 每个小标题只讲一个点，每讲完一个点就给一张图承接\n\n"
+        f"- 互动钩子: 你平时最容易在哪一步被带偏，评论区聊聊。\n"
+        f"- 免责声明:\n\n"
         f"## 正文\n\n"
         f"很多人一提到「{topic}」，往往会直接跳到结论。但真正决定读者能不能看进去的，不是结论，而是你有没有把那条最关键的逻辑链讲清楚。\n\n"
         f"### 先把问题点明\n\n"
@@ -7421,23 +7501,10 @@ def render_fallback_story_content_v2(
         f"# {cover_title}\n\n"
         f"## Meta\n"
         f"- 封面副标题: {cover_subtitle}\n"
-        f"- 输入类型: 话题文字\n"
-        f"- 题材类型: 知识科普\n"
-        f"- 选题评分: 熟悉度 1.0 + 反常识 0.9 + 故事性 0.9 + 现实连接 0.8 + 可视化 0.8 = 4.4\n"
-        f"- HKR判断: H 命中；K 命中；R 命中\n"
-        f"- 评分等级: A级 4-4.4\n"
-        f"- 低分处理: 无需处理\n"
         f"- 核心观点: 真正能把「{topic}」讲明白的，不是表面结论，而是那条因果链。\n"
         f"- 时长: {duration}\n"
         f"- 推荐发布标题: {publish_title}\n"
-        f"- 备选标题: A. 很多人聊「{topic}」，其实第一步就讲偏了 / B. 「{topic}」最容易漏掉的，不是结论 / C. 「{topic}」真正关键的那一步\n"
         f"- 钩子: {hook}\n"
-        f"- 备选钩子: A. 很多人一聊这个题，第一句就错了 / B. 表面看懂了，其实关键还没讲到 / C. 别急着下结论，真正要看的在后面\n"
-        f"- 钩子策略: 反常识 + 痛点共鸣 + 未说完的问题\n"
-        f"- 前3秒视觉钩子: 第一张图直接给出最容易误判的真实场景，让观众一眼代入。\n"
-        f"- 情绪曲线: 开头被钩住 -> 中段一路拆解 -> 后段恍然 -> 结尾想留言\n"
-        f"- 节奏策略: 前 15 秒先给误判点；中段每 2-3 句推进一次；结尾回扣开头并抛互动\n"
-        f"- callback设计: 开头用“别急着下结论”埋钩，结尾回到“先看第一步”。\n"
         f"- 互动钩子: {interaction_hook}\n"
         f"- 免责声明:\n\n"
         f"## 原始材料简述\n"
@@ -7492,18 +7559,11 @@ def render_fallback_article_content_v2(
         f"# {title}\n\n"
         f"## Meta\n"
         f"- 封面副标题: {subtitle}\n"
-        f"- 输入类型: 话题文字\n"
-        f"- 题材类型: 知识科普图文\n"
-        f"- 选题评分: 好奇心 0.9 + 反差 0.9 + 可视化 0.8 + 评论欲 0.8 + 合规 1.0 = 4.4\n"
-        f"- HKR判断: H 命中；K 命中；R 命中\n"
-        f"- 评分等级: A级 4-4.4\n"
-        f"- 低分处理: 无需处理\n"
         f"- 核心观点: 真正值得讲的不是表面定义，而是观众最容易漏掉的那个关键动作。\n"
         f"- 推荐发布标题: {publish_title}\n"
         f"- 钩子: 很多人聊「{topic}」时，最重要的那一步反而最少被提到。\n"
-        f"- 备选导语: A. 表面看懂了，其实关键还没讲到 / B. 这件事最容易误判的，不在结论 / C. 真正让人踩坑的，是开头第一步\n"
-        f"- 情绪曲线: 开头被钩住 -> 中段拆误区 -> 后段看懂机制 -> 结尾想留言\n"
-        f"- 节奏策略: 每一小节只推进一个点，并用具体场景承接下一屏\n\n"
+        f"- 互动钩子: 你最容易在哪一步看偏，评论区聊聊。\n"
+        f"- 免责声明:\n\n"
         f"## 正文\n\n"
         f"很多内容一提到「{topic}」，上来就忙着解释是什么。可真正决定读者会不会继续往下看的，往往不是定义，而是你有没有先指出那个最容易误判的瞬间。\n\n"
         f"### 先说最容易讲偏的地方\n\n"
@@ -7629,6 +7689,7 @@ def render_deepseek_content(
                 content = rewritten
         except Exception:
             pass
+    content = compact_content_meta(content)
     return content + ("\n" if not content.endswith("\n") else "")
 
 
@@ -9078,6 +9139,7 @@ def enhance_content_rhythm(project_id: int, content: str | None = None, *, save:
     topic = clean_text(project.get("topic_name") or first_heading(original) or "")
     enhanced_script, edit_stats = enhance_script_section_rhythm(script, topic, mode)
     enhanced = replace_section(original, title, enhanced_script, level=2)
+    enhanced = compact_content_meta(enhanced)
     if enhanced != original:
         enhanced = refresh_content_image_prompts(project, template, enhanced)
     summary = summarize_content(enhanced, mode)
@@ -9851,6 +9913,7 @@ def optimize_project_content(project_id: int, content: str | None = None) -> dic
     else:
         deepseek_error = "当前环境缺少 openai 依赖，无法调用 DeepSeek。"
 
+    optimized_content = compact_content_meta(optimized_content)
     image_refreshed_content = refresh_content_image_prompts(project, template, optimized_content)
     changed = image_refreshed_content != original_content
     summary = summarize_content(image_refreshed_content, mode)
@@ -10821,6 +10884,7 @@ class ContentRuntime:
                 content = await asyncio.to_thread(render_fallback_content, project, template, brief, tavily_topic, context)
                 provider = "fallback"
 
+            content = compact_content_meta(content)
             content = refresh_content_image_prompts(project, template, content)
             summary = summarize_content(content, template.get("mode", "video"))
             artifacts = build_content_artifacts(project, template, brief, tavily_topic, references, content)
